@@ -1,0 +1,17 @@
+# Secrets — the bearer token never enters version control
+.env
+*.env
+!.env.example
+
+# Node / Bun
+node_modules/
+*.tsbuildinfo
+
+# Browser profile and cache volumes — runtime state, often large
+profile/
+cache/
+*.jsonl
+
+# OS
+.DS_Store
+Thumbs.db
