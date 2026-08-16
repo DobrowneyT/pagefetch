@@ -1,0 +1,27 @@
+{
+  "name": "pagefetch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A browser-backed fetch service. Fetches pages plain HTTP cannot.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/src/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/test/unit/*.test.js",
+    "test:container": "./scripts/test-container.sh",
+    "test:live": "npm run build && PAGEFETCH_LIVE=1 node --test dist/test/live/*.test.js"
+  },
+  "dependencies": {
+    "playwright": "1.62.1",
+    "turndown": "^7.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/turndown": "^5.0.5",
+    "typescript": "^5.9.0"
+  }
+}

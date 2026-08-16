@@ -1,0 +1,67 @@
+export interface Config {
+  bind: string
+  port: number
+  token: string
+  profileDir: string
+  navTimeoutMs: number
+  selectorTimeoutMs: number
+  maxConcurrency: number
+  /**
+   * Hostnames exempt from the private-address rejection.
+   *
+   * This exists so the test suite can point the browser at a fixture container
+   * on a private Docker address. It is a CONFIG entry and never a request
+   * parameter, for the same reason the robots override is: no caller may relax
+   * policy at call time. Empty in production, and the server says so loudly at
+   * startup when it is not.
+   */
+  allowHosts: Set<string>
+}
+
+function required(env: NodeJS.ProcessEnv, name: string): string {
+  const value = env[name]
+  if (!value) throw new Error(`${name} is required. Copy .env.example to .env and fill it in.`)
+  return value
+}
+
+function number(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+  const raw = env[name]
+  if (!raw) return fallback
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${name} must be a positive number, got ${raw}`)
+  return parsed
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const bind = env.PAGEFETCH_BIND ?? "127.0.0.1"
+
+  // Binding to a non-loopback interface is a security decision, not a typo, so
+  // it has to be stated out loud rather than reached by leaving a var unset.
+  if (bind !== "127.0.0.1" && bind !== "::1" && env.PAGEFETCH_ALLOW_PUBLIC_BIND !== "i-understand") {
+    throw new Error(
+      `PAGEFETCH_BIND is "${bind}". This service must bind to loopback — it is an SSRF primitive and ` +
+        `must never be reachable from the network. Set PAGEFETCH_ALLOW_PUBLIC_BIND=i-understand only ` +
+        `for a container whose published port is already pinned to 127.0.0.1 on the host.`,
+    )
+  }
+
+  const token = required(env, "PAGEFETCH_TOKEN")
+  if (token.length < 16) throw new Error("PAGEFETCH_TOKEN must be at least 16 characters.")
+  if (token === "generate-a-random-token-here") throw new Error("PAGEFETCH_TOKEN is still the placeholder from .env.example.")
+
+  return {
+    bind,
+    port: number(env, "PAGEFETCH_PORT", 8790),
+    token,
+    profileDir: env.PAGEFETCH_PROFILE_DIR ?? "/data/profile",
+    navTimeoutMs: number(env, "PAGEFETCH_NAV_TIMEOUT_MS", 20_000),
+    selectorTimeoutMs: number(env, "PAGEFETCH_SELECTOR_TIMEOUT_MS", 10_000),
+    maxConcurrency: number(env, "PAGEFETCH_MAX_CONCURRENCY", 2),
+    allowHosts: new Set(
+      (env.PAGEFETCH_ALLOW_HOSTS ?? "")
+        .split(",")
+        .map((h) => h.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  }
+}

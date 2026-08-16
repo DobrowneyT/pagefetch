@@ -1,0 +1,31 @@
+# Overlay for the container test suite:
+#   docker compose -f compose.yml -f compose.test.yml up -d
+#
+# It adds a fixture origin on the pagefetch network and, for that host ONLY,
+# relaxes the private-address check — the fixture necessarily lives at a private
+# Docker address. PAGEFETCH_ALLOW_HOSTS is a config entry, never a request
+# parameter, so no caller can reach for this at call time.
+#
+# The redirect-hop test still bites: `fixture` is allowed, and 169.254.169.254
+# is not, so a redirect from one to the other is rejected on the hop.
+
+services:
+  pagefetch:
+    environment:
+      PAGEFETCH_ALLOW_HOSTS: fixture
+      PAGEFETCH_NAV_TIMEOUT_MS: "8000"
+      PAGEFETCH_SELECTOR_TIMEOUT_MS: "4000"
+    depends_on:
+      - fixture
+
+  fixture:
+    image: node:20-alpine
+    container_name: pagefetch-fixture
+    restart: unless-stopped
+    command: ["node", "/fixture/server.mjs"]
+    volumes:
+      - ./test/fixture:/fixture:ro
+    networks:
+      pagefetch:
+        aliases:
+          - fixture

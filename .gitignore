@@ -5,6 +5,7 @@
 
 # Node / Bun
 node_modules/
+dist/
 *.tsbuildinfo
 
 # Browser profile and cache volumes — runtime state, often large

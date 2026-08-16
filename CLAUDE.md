@@ -7,8 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `pagefetch` — a self-hosted service that fetches pages plain HTTP cannot, by
 driving a real browser in an isolated Docker container on a VPS.
 
-**Status: specified, not built.** No code exists yet. The requirements are in
-`docs/PRD.md` and filed as issue #1.
+**Status: tracer bullet built.** `fetch_page` over `POST /fetch`, running in the
+container, with URL validation, redirect-hop re-validation, loopback binding and
+the bearer token in place. All three container security tests pass on the VPS.
+
+**Not built yet, and it matters:** the cache, the rate limiter, benching and
+disabling, **`robots.txt` enforcement**, the `/mcp` transport, and the other
+three tools. Until robots is enforced, any live target must have its `robots.txt`
+checked by hand, and the service should not be left running. The rest is in
+`docs/PRD.md` and issue #1.
 
 ## Read first
 

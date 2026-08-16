@@ -142,10 +142,17 @@ Both route into one handler so behaviour cannot diverge. This exists because con
 and expects:
 
 ```json
-{ "status": "...", "code": "ok", "content": "...", "url_final": "...", "fetched_at": "...", "from_cache": false }
+{ "status": 200, "code": "ok", "content": "...", "url_final": "...", "fetched_at": "...", "from_cache": false }
 ```
 
 That client has never spoken to a real server. Either honour this shape or change it deliberately and update the consumer in the same change — do not leave them mismatched.
+
+**`status` is the origin's HTTP status as a number, and `code` carries the error
+contract.** They are not interchangeable: a `blocked_challenge` arrives with
+`status: 403`, and collapsing the two would throw away what the site actually
+said. An earlier draft of this document showed `status` as a string mirroring
+`code`; `docs/USING-PAGEFETCH.md` always had it as a number, and the number is
+correct. The consumer's type was corrected in the same change that settled this.
 
 ### Tool surface
 

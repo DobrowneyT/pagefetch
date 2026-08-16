@@ -1,0 +1,49 @@
+# Layer 1 of the three security layers, and the most important one: this service
+# gets its OWN network with no route to the dashboard network. It is the layer
+# that holds even when the code is wrong.
+#
+# Do NOT add this to tnl-dashboard_default. Do NOT put it behind the public
+# nginx — it would be one misconfigured location block away from an open proxy
+# that anyone on the internet can point at anything.
+
+services:
+  pagefetch:
+    build: .
+    image: pagefetch:local
+    container_name: pagefetch
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Inside the container we bind to all interfaces, because the container's
+      # network namespace is the boundary. The host-side pin below is what makes
+      # it loopback-only from the outside.
+      PAGEFETCH_BIND: 0.0.0.0
+      PAGEFETCH_ALLOW_PUBLIC_BIND: i-understand
+      PAGEFETCH_PROFILE_DIR: /data/profile
+    ports:
+      # The 127.0.0.1 prefix is load-bearing. Without it Docker publishes on
+      # every interface and punches through the host firewall to do it.
+      - "127.0.0.1:8790:8790"
+    networks:
+      - pagefetch
+    volumes:
+      - pagefetch-data:/data
+    # Chromium leaks over days and will crash on large pages with Docker's
+    # default 64MB /dev/shm.
+    mem_limit: 2g
+    shm_size: 1gb
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8790/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  pagefetch:
+    name: pagefetch
+
+volumes:
+  pagefetch-data:
