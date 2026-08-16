@@ -45,6 +45,7 @@ whether this build succeeded should read it first.
 | [`CONTEXT.md`](CONTEXT.md) | Any time. The domain glossary — block, bench, challenge, and shell each have one fixed meaning here. |
 | [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md) | You are filing or triaging issues. |
 | [`CLAUDE.md`](CLAUDE.md) | You are an agent working in this repo. |
+| [`docs/history/original-proposal.md`](docs/history/original-proposal.md) | You want the reasoning behind a settled decision. The original 2026-08-09 proposal, superseded by the PRD. **Background only — do not implement from it.** |
 
 **If you only need to call the service, `docs/USING-PAGEFETCH.md` is the only
 document you need.** You should never have to read the server's source to use it
