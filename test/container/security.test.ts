@@ -30,6 +30,15 @@ test("a redirect to loopback is rejected at the hop", async () => {
   assert.equal(outcome.content, null)
 })
 
+test("a redirect to a public NAME that resolves to a private address is rejected", async () => {
+  // The URL text is innocent — only resolution gives it away. The proxy resolves
+  // the name itself and connects to that exact address, so there is no second
+  // lookup for a hostile resolver to answer differently.
+  const outcome = await fetchPage({ url: "http://fixture:3000/redirect-to-dns-private" })
+  assert.equal(outcome.code, "invalid_url", `expected invalid_url, got ${outcome.code}: ${outcome.detail}`)
+  assert.equal(outcome.content, null)
+})
+
 test("a benign redirect still works, so the guard is a guard and not a wall", async () => {
   // Without this, a broken redirect implementation would pass the test above for
   // entirely the wrong reason.

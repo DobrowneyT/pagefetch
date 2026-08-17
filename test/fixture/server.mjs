@@ -82,6 +82,12 @@ const routes = {
     res.writeHead(302, { location: "http://127.0.0.1:5432/" })
     res.end()
   },
+  // A public NAME that resolves to a private address. The URL text is entirely
+  // innocent; only resolution gives it away, which is why the proxy resolves.
+  "/redirect-to-dns-private": (res) => {
+    res.writeHead(302, { location: "http://localtest.me/" })
+    res.end()
+  },
   // A benign redirect, so we can tell "redirects are broken" from "redirects are guarded".
   "/redirect-to-csr": (res) => {
     res.writeHead(302, { location: "/csr" })

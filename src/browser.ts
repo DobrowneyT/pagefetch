@@ -1,8 +1,9 @@
 import { chromium, errors as playwrightErrors, type BrowserContext, type Page, type Response } from "playwright"
 import type { Config } from "./config.js"
 import { result, type FetchResult } from "./codes.js"
+import { EgressProxy, REJECTED_HEADER } from "./egress-proxy.js"
 import { extract, type Format } from "./extract.js"
-import { validateUrl, validateUrlSyntax } from "./url-validation.js"
+import { validateUrl } from "./url-validation.js"
 
 export interface FetchRequest {
   url: string
@@ -10,7 +11,6 @@ export interface FetchRequest {
   waitFor?: string
 }
 
-const MAX_REDIRECTS = 10
 const CHALLENGE_POLL_MS = 500
 
 /** Markers a Cloudflare-style interstitial leaves behind even on a 200. */
@@ -51,9 +51,11 @@ export class Browser {
   private context: BrowserContext | null = null
   private starting: Promise<BrowserContext> | null = null
   private readonly gate: Semaphore
+  private readonly proxy: EgressProxy
 
   constructor(private readonly config: Config) {
     this.gate = new Semaphore(config.maxConcurrency)
+    this.proxy = new EgressProxy(config)
   }
 
   /**
@@ -69,13 +71,24 @@ export class Browser {
     if (this.context) return this.context
     if (this.starting) return this.starting
 
-    this.starting = chromium
-      .launchPersistentContext(this.config.profileDir, {
-        headless: true,
-        // Chromium's default /dev/shm is 64MB inside Docker and it will crash on
-        // a large page. compose.yml also sets shm_size; this is the belt.
-        args: ["--disable-dev-shm-usage"],
-      })
+    this.starting = this.proxy
+      .listen()
+      .then(() =>
+        chromium.launchPersistentContext(this.config.profileDir, {
+          headless: true,
+          args: [
+            // Chromium's default /dev/shm is 64MB inside Docker and it will
+            // crash on a large page. compose.yml also sets shm_size.
+            "--disable-dev-shm-usage",
+            // Everything egresses through our validating proxy.
+            `--proxy-server=${this.proxy.address}`,
+            // Chromium bypasses the proxy for loopback by default, which would
+            // let a page reach 127.0.0.1 without ever being validated. This
+            // subtracts that implicit exemption.
+            "--proxy-bypass-list=<-loopback>",
+          ],
+        }),
+      )
       .then((context) => {
         context.on("close", () => {
           this.context = null
@@ -99,11 +112,13 @@ export class Browser {
     const context = this.context
     this.context = null
     if (context) await context.close().catch(() => {})
+    await this.proxy.close()
   }
 
   async fetchPage(request: FetchRequest): Promise<FetchResult> {
-    // Validate before the browser is touched at all. An invalid URL should never
-    // reach Chromium, because Chromium is the thing that would go and fetch it.
+    // Validate before the browser is touched at all. The proxy would refuse this
+    // anyway; doing it here means an obviously bad URL costs nothing and gets a
+    // better error than a failed navigation would produce.
     const verdict = await validateUrl(request.url, this.config.allowHosts)
     if (!verdict.ok) return result("invalid_url", { detail: verdict.reason })
 
@@ -113,14 +128,8 @@ export class Browser {
   private async navigate(request: FetchRequest): Promise<FetchResult> {
     const context = await this.ensureContext()
     const page = await context.newPage()
+    const startedAt = Date.now()
 
-    /** Hops rejected mid-flight. Non-empty means we stopped a redirect, not the origin. */
-    const blockedHops: string[] = []
-    /**
-     * The end of the redirect chain. Tracked by hand because we fulfil the
-     * navigation ourselves, so `page.url()` still reports what was submitted.
-     */
-    let finalUrl = request.url
     /**
      * The most recent main-frame document response.
      *
@@ -136,64 +145,6 @@ export class Browser {
     })
 
     try {
-      await page.route("**/*", async (route) => {
-        const target = route.request().url()
-
-        // Subresources: the cheap synchronous check. There are many of them and
-        // they do not redirect the document anywhere.
-        if (!route.request().isNavigationRequest()) {
-          const hop = validateUrlSyntax(target, this.config.allowHosts)
-          if (!hop.ok) {
-            blockedHops.push(hop.reason)
-            await route.abort("blockedbyclient").catch(() => {})
-            return
-          }
-          await route.continue().catch(() => {})
-          return
-        }
-
-        // Navigations: we walk the redirect chain ourselves.
-        //
-        // This is not fastidiousness. Chromium follows a 3xx INTERNALLY and
-        // never re-enters Playwright's routing for the new URL, so a handler
-        // that merely calls route.continue() validates the submitted URL and
-        // nothing else — and the submitted URL is the one part of the chain an
-        // attacker is happy to make look legitimate. Walking it here is what
-        // makes "re-validated on every hop" true rather than aspirational.
-        let current = target
-        for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-          const verdict = await validateUrl(current, this.config.allowHosts)
-          if (!verdict.ok) {
-            blockedHops.push(verdict.reason)
-            await route.abort("blockedbyclient").catch(() => {})
-            return
-          }
-
-          let response
-          try {
-            response = await route.fetch({ url: current, maxRedirects: 0 })
-          } catch (error) {
-            blockedHops.push(`hop failed: ${(error as Error).message}`)
-            await route.abort("failed").catch(() => {})
-            return
-          }
-
-          const location = response.headers()["location"]
-          const status = response.status()
-          if (status >= 300 && status < 400 && location) {
-            current = new URL(location, current).toString()
-            continue
-          }
-
-          finalUrl = current
-          await route.fulfill({ response }).catch(() => {})
-          return
-        }
-
-        blockedHops.push(`more than ${MAX_REDIRECTS} redirects`)
-        await route.abort("blockedbyclient").catch(() => {})
-      })
-
       let response: Response | null
       try {
         response = await page.goto(request.url, {
@@ -201,8 +152,11 @@ export class Browser {
           timeout: this.config.navTimeoutMs,
         })
       } catch (error) {
-        if (blockedHops.length > 0) {
-          return result("invalid_url", { detail: `redirect hop rejected: ${blockedHops.join("; ")}` })
+        // An HTTPS hop the proxy refused fails the navigation outright, because
+        // a rejected CONNECT is not a response the browser can render.
+        const refused = this.proxy.rejectionsSince(startedAt)
+        if (refused.length > 0) {
+          return result("invalid_url", { detail: `blocked at the hop: ${describe(refused)}` })
         }
         if (error instanceof playwrightErrors.TimeoutError) {
           return result("timeout", { detail: `navigation exceeded ${this.config.navTimeoutMs}ms` })
@@ -213,10 +167,12 @@ export class Browser {
         return result("timeout", { detail: `navigation failed: ${(error as Error).message}` })
       }
 
-      // A rejection can also land after goto resolves, when the abort happens on
-      // a subresource or a client-side redirect.
-      if (blockedHops.length > 0 && !response) {
-        return result("invalid_url", { detail: `redirect hop rejected: ${blockedHops.join("; ")}` })
+      // A plain-HTTP hop the proxy refused comes back as a renderable 403, which
+      // is indistinguishable from an origin's own 403 by status alone. The header
+      // is what makes it unmistakably ours.
+      const refusedInline = (lastMainResponse ?? response)?.headers()[REJECTED_HEADER]
+      if (refusedInline) {
+        return result("invalid_url", { detail: `blocked at the hop: ${refusedInline}` })
       }
 
       // Let an interstitial clear itself before we judge it, and before the
@@ -231,7 +187,7 @@ export class Browser {
           if (error instanceof playwrightErrors.TimeoutError) {
             return result("timeout", {
               status: (lastMainResponse ?? response)?.status() ?? null,
-              url_final: this.resolveFinalUrl(page, request.url, finalUrl),
+              url_final: page.url(),
               detail: `selector ${request.waitFor} did not appear within ${this.config.selectorTimeoutMs}ms`,
             })
           }
@@ -241,15 +197,16 @@ export class Browser {
 
       const settled = lastMainResponse ?? response
       const status = settled?.status() ?? null
-      const urlFinal = this.resolveFinalUrl(page, request.url, finalUrl)
       const html = await page.content()
 
       const blocked = this.classifyBlock(status, html, settled)
-      if (blocked) return result(blocked.code, { status, url_final: urlFinal, detail: blocked.detail })
+      if (blocked) return result(blocked.code, { status, url_final: page.url(), detail: blocked.detail })
 
       return result("ok", {
         status,
-        url_final: urlFinal,
+        // The browser navigates redirects itself now, so its own URL is the end
+        // of the chain, fragment included.
+        url_final: page.url(),
         content: await extract(page, request.format),
       })
     } finally {
@@ -275,9 +232,7 @@ export class Browser {
    * any real browser that executes its JavaScript and keeps a cookie jar. We
    * are a real browser that does both. Reporting `blocked_challenge` at t≈0,
    * as this did before, gave the wrong answer to a challenge a stock browser
-   * would have walked through — the PRD's whole premise is that a browser
-   * resolves this as a side effect of being a browser, and it needs a few
-   * seconds to do so.
+   * would have walked through.
    *
    * If it has not cleared within the budget, the answer is still
    * `blocked_challenge`, and the answer is still stop.
@@ -303,47 +258,12 @@ export class Browser {
   }
 
   /**
-   * `url_final` is worth getting exactly right — a caller checks it to notice a
-   * redirect that landed somewhere unexpected, which is the whole point of
-   * returning it. Three cases, and the browser's own URL is only right for one:
-   *
-   *   - The page navigated itself (a client-side redirect). The browser knows.
-   *   - The origin redirected us. We fulfilled the navigation ourselves, so the
-   *     browser still shows what was submitted and the chain end is the truth.
-   *   - A fragment route. The fragment never went to the server, so it is not in
-   *     the chain end, but it is the only part that identified the content.
-   */
-  private resolveFinalUrl(page: Page, requested: string, chainEnd: string): string {
-    const withoutFragment = (raw: string): string => {
-      try {
-        const url = new URL(raw)
-        url.hash = ""
-        return url.toString()
-      } catch {
-        return raw
-      }
-    }
-
-    const browserUrl = page.url()
-    if (withoutFragment(browserUrl) !== withoutFragment(requested)) return browserUrl
-
-    try {
-      const end = new URL(chainEnd)
-      const fragment = new URL(requested).hash
-      if (fragment && !end.hash) end.hash = fragment
-      return end.toString()
-    } catch {
-      return chainEnd
-    }
-  }
-
-  /**
    * Maps what the origin said onto the closed code set.
    *
    * Note the gap: the set has no member for "the origin is broken" (a 500). The
    * consumer contract tells callers not to reach for pagefetch on a 500, so this
-   * returns `ok` with the honest numeric status rather than inventing a code —
-   * adding one is an API change and not this slice's to make.
+   * returns `ok` with the honest numeric status rather than inventing a code.
+   * Tracked in #4.
    */
   private classifyBlock(
     status: number | null,
@@ -365,4 +285,8 @@ export class Browser {
 
     return null
   }
+}
+
+function describe(rejections: { host: string; reason: string }[]): string {
+  return rejections.map((entry) => entry.reason).join("; ")
 }
