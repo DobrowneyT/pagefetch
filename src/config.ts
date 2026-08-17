@@ -8,6 +8,15 @@ export interface Config {
   /** How long an interstitial gets to clear itself before we call it blocked. */
   challengeBudgetMs: number
   maxConcurrency: number
+  robotsTtlSeconds: number
+  /**
+   * Hosts whose `robots.txt` is deliberately ignored.
+   *
+   * A config entry, never a request parameter — no caller may override policy at
+   * call time, and every use is logged. Empty by default, and it should stay
+   * that way unless a human has decided otherwise for a specific domain.
+   */
+  robotsOverride: Set<string>
   /**
    * Hostnames exempt from the private-address rejection.
    *
@@ -32,6 +41,15 @@ function number(env: NodeJS.ProcessEnv, name: string, fallback: number): number 
   const parsed = Number(raw)
   if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${name} must be a positive number, got ${raw}`)
   return parsed
+}
+
+function hostSet(raw: string | undefined): Set<string> {
+  return new Set(
+    (raw ?? "")
+      .split(",")
+      .map((host) => host.trim().toLowerCase())
+      .filter(Boolean),
+  )
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -60,11 +78,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     selectorTimeoutMs: number(env, "PAGEFETCH_SELECTOR_TIMEOUT_MS", 10_000),
     challengeBudgetMs: number(env, "PAGEFETCH_CHALLENGE_BUDGET_MS", 15_000),
     maxConcurrency: number(env, "PAGEFETCH_MAX_CONCURRENCY", 2),
-    allowHosts: new Set(
-      (env.PAGEFETCH_ALLOW_HOSTS ?? "")
-        .split(",")
-        .map((h) => h.trim().toLowerCase())
-        .filter(Boolean),
-    ),
+    robotsTtlSeconds: number(env, "PAGEFETCH_ROBOTS_TTL_SECONDS", 86_400),
+    robotsOverride: hostSet(env.PAGEFETCH_ROBOTS_OVERRIDE),
+    allowHosts: hostSet(env.PAGEFETCH_ALLOW_HOSTS),
   }
 }

@@ -13,6 +13,14 @@ if (config.allowHosts.size > 0) {
   )
 }
 
+if (config.robotsOverride.size > 0) {
+  console.warn(
+    `[pagefetch] WARNING: robots.txt is being IGNORED for ${[...config.robotsOverride].join(", ")}. ` +
+      `Each of those is a deliberate decision to fetch what a site asked us not to. ` +
+      `Every use is logged as robots_override_used.`,
+  )
+}
+
 server.listen(config.port, config.bind, () => {
   console.log(`[pagefetch] listening on ${config.bind}:${config.port}`)
 })

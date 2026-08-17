@@ -3,6 +3,7 @@ import type { Config } from "./config.js"
 import { result, type FetchResult } from "./codes.js"
 import { EgressProxy, REJECTED_HEADER } from "./egress-proxy.js"
 import { extract, type Format } from "./extract.js"
+import { Robots } from "./robots.js"
 import { validateUrl } from "./url-validation.js"
 
 export interface FetchRequest {
@@ -52,10 +53,14 @@ export class Browser {
   private starting: Promise<BrowserContext> | null = null
   private readonly gate: Semaphore
   private readonly proxy: EgressProxy
+  private readonly robots: Robots
 
   constructor(private readonly config: Config) {
     this.gate = new Semaphore(config.maxConcurrency)
     this.proxy = new EgressProxy(config)
+    // Robots fetches through the raw path, not through fetchPage, or checking
+    // robots would require checking robots.
+    this.robots = new Robots(config, (url) => this.gate.run(() => this.navigate({ url, format: "text" })))
   }
 
   /**
@@ -121,6 +126,13 @@ export class Browser {
     // better error than a failed navigation would produce.
     const verdict = await validateUrl(request.url, this.config.allowHosts)
     if (!verdict.ok) return result("invalid_url", { detail: verdict.reason })
+
+    // Policy before network. A disallowed path must cost the origin nothing at
+    // all beyond the robots.txt we already had to read.
+    const permission = await this.robots.check(verdict.url)
+    if (!permission.allowed) {
+      return result(permission.code ?? "blocked_robots", { detail: permission.detail })
+    }
 
     return this.gate.run(() => this.navigate(request))
   }

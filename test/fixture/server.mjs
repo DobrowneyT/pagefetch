@@ -63,6 +63,30 @@ const html = (res, status, body, headers = {}) => {
   res.end(body)
 }
 
+const text = (res, status, body) => {
+  res.writeHead(status, { "content-type": "text/plain; charset=utf-8" })
+  res.end(body)
+}
+
+/**
+ * Requests counted per "host path", so tests can assert NETWORK SILENCE rather
+ * than trusting a flag. A cache hit that revalidated is not a cache hit, and a
+ * robots decision that refetched robots.txt every time is not a cached policy.
+ */
+const counts = new Map()
+
+const ROBOTS_BY_HOST = {
+  // The default host: one disallowed subtree with a more specific Allow inside
+  // it, so longest-match precedence is exercised rather than assumed.
+  fixture: `User-agent: *
+Disallow: /private
+Allow: /private/public
+
+User-agent: SomeOtherBot
+Disallow: /
+`,
+}
+
 const routes = {
   "/csr": (res) => html(res, 200, CSR_PAGE),
   "/spa": (res) => html(res, 200, SPA_PAGE),
@@ -96,10 +120,52 @@ const routes = {
   "/slow": (res) => {
     setTimeout(() => html(res, 200, "<html><body>eventually</body></html>"), 60_000)
   },
+
+  // Under the disallowed subtree, and the exception inside it.
+  "/private/secret": (res) => html(res, 200, "<html><body><h1>Secret</h1></body></html>"),
+  "/private/public/ok": (res) => html(res, 200, "<html><body><h1>Public exception</h1></body></html>"),
+}
+
+/**
+ * `robots.txt` varies by host so one fixture container can present the three
+ * cases that matter: a real policy, no file at all, and a policy we cannot read
+ * because the origin challenges us for it — which is what the site that prompted
+ * this whole build actually does.
+ */
+function serveRobots(req, res) {
+  const host = (req.headers.host ?? "").split(":")[0]
+
+  if (host.startsWith("norobots")) {
+    // No robots file. RFC 9309: absent means no restrictions.
+    return html(res, 404, "<html><body>no robots here</body></html>")
+  }
+  if (host.startsWith("challengerobots")) {
+    return html(res, 403, CHALLENGE_PAGE, { "cf-mitigated": "challenge" })
+  }
+  return text(res, 200, ROBOTS_BY_HOST.fixture)
 }
 
 createServer((req, res) => {
   const path = new URL(req.url, "http://fixture").pathname
+  const host = (req.headers.host ?? "").split(":")[0]
+
+  // The bookkeeping endpoints are not themselves counted, or they would show up
+  // in the very numbers they report.
+  if (path === "/__count") {
+    res.writeHead(200, { "content-type": "application/json" })
+    return res.end(JSON.stringify(Object.fromEntries(counts)))
+  }
+  if (path === "/__reset") {
+    counts.clear()
+    res.writeHead(200, { "content-type": "application/json" })
+    return res.end("{}")
+  }
+
+  const key = `${host} ${path}`
+  counts.set(key, (counts.get(key) ?? 0) + 1)
+
+  if (path === "/robots.txt") return serveRobots(req, res)
+
   const route = routes[path]
   if (route) return route(res)
   html(res, 404, "<html><body>no such fixture route</body></html>")

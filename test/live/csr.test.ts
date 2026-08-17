@@ -14,8 +14,11 @@ import { fetchPage } from "../container/client.js"
  * Target: quotes.toscrape.com is published as a scraping practice site and
  * serves no robots.txt, so nothing is disallowed. Its /js/ variant renders its
  * content with JavaScript, which is precisely the failure mode this service
- * exists to fix. Robots enforcement is NOT yet implemented — until it is, any
- * target added here must have its robots.txt checked by hand first.
+ * exists to fix.
+ *
+ * Robots is enforced now (#2), so these tests also stand as proof that a 404 on
+ * robots.txt reads as "allowed" against a real origin rather than only against
+ * the fixture — if that distinction ever regressed, this file goes red.
  */
 
 const LIVE = process.env.PAGEFETCH_LIVE === "1"

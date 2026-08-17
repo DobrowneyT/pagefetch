@@ -12,7 +12,13 @@
 services:
   pagefetch:
     environment:
-      PAGEFETCH_ALLOW_HOSTS: fixture
+      # Three aliases for one fixture container, so robots.txt can present a real
+      # policy, no file at all, and a policy behind a challenge.
+      PAGEFETCH_ALLOW_HOSTS: fixture,norobots-fixture,challengerobots-fixture,override-fixture
+      # Deliberately overriding one host, so the test suite can prove an override
+      # works AND that it does not leak to any other host.
+      PAGEFETCH_ROBOTS_OVERRIDE: override-fixture
+      PAGEFETCH_ROBOTS_TTL_SECONDS: "3600"
       PAGEFETCH_NAV_TIMEOUT_MS: "8000"
       PAGEFETCH_SELECTOR_TIMEOUT_MS: "4000"
       # Shorter than production so the suite stays quick. The fixture challenge
@@ -26,9 +32,16 @@ services:
     container_name: pagefetch-fixture
     restart: unless-stopped
     command: ["node", "/fixture/server.mjs"]
+    ports:
+      # Loopback only, and only so the suite can read the request counts that
+      # let it assert network silence. Not part of the fetch path.
+      - "127.0.0.1:3100:3000"
     volumes:
       - ./test/fixture:/fixture:ro
     networks:
       pagefetch:
         aliases:
           - fixture
+          - norobots-fixture
+          - challengerobots-fixture
+          - override-fixture

@@ -11,11 +11,15 @@ driving a real browser in an isolated Docker container on a VPS.
 container, with URL validation, redirect-hop re-validation, loopback binding and
 the bearer token in place. All three container security tests pass on the VPS.
 
-**Not built yet, and it matters:** the cache, the rate limiter, benching and
-disabling, **`robots.txt` enforcement**, the `/mcp` transport, and the other
-three tools. Until robots is enforced, any live target must have its `robots.txt`
-checked by hand, and the service should not be left running. The rest is in
-`docs/PRD.md` and issue #1.
+`robots.txt` is enforced (#2). A genuine 404 means **allowed** — RFC 9309, absent
+means no restrictions — while a challenge that hides robots means refused, and
+only "we read it and it says no" is `blocked_robots`.
+
+**Not built yet, and it matters:** the cache, the **rate limiter**, benching and
+disabling, the `/mcp` transport, and the other three tools. Without the limiter
+there is nothing but the global concurrency cap between an eager caller and the
+shared egress IP, so use it deliberately rather than leaving it running. The rest
+is in `docs/PRD.md` and issue #1.
 
 ## Read first
 
