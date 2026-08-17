@@ -124,6 +124,16 @@ export function isAllowed(rules: readonly Rule[], path: string): boolean {
 }
 
 export class Robots {
+  /**
+   * Policy fetches in flight, keyed by origin.
+   *
+   * Without this, twenty simultaneous first-requests to a domain each find no
+   * cached policy and each fetch robots.txt — twenty requests to prove we are
+   * allowed to make one. The store deduplicates across time; this deduplicates
+   * across concurrency.
+   */
+  private readonly inflight = new Map<string, Promise<CachedRobots>>()
+
   constructor(
     private readonly config: Config,
     private readonly store: Store,
@@ -163,9 +173,18 @@ export class Robots {
     const cached = this.store.lookupRobots(origin, this.config.robotsTtlSeconds)
     if (cached) return cached
 
-    const entry = await this.fetchPolicy(origin)
-    this.store.storeRobots(origin, entry)
-    return entry
+    const existing = this.inflight.get(origin)
+    if (existing) return existing
+
+    const pending = this.fetchPolicy(origin)
+      .then((entry) => {
+        this.store.storeRobots(origin, entry)
+        return entry
+      })
+      .finally(() => this.inflight.delete(origin))
+
+    this.inflight.set(origin, pending)
+    return pending
   }
 
   private async fetchPolicy(origin: string): Promise<CachedRobots> {

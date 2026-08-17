@@ -8,6 +8,14 @@ export interface Config {
   /** How long an interstitial gets to clear itself before we call it blocked. */
   challengeBudgetMs: number
   maxConcurrency: number
+  /** Spacing between requests to one domain. Enforced by waiting, not refusing. */
+  minDomainIntervalSeconds: number
+  /** The hourly cap. Enforced by refusing, with `retry_after`. */
+  maxRequestsPerDomainHour: number
+  /** How long a domain sits out after it blocks us. */
+  benchMinutes: number
+  /** Blocks in a day before the domain is disabled until a human intervenes. */
+  blocksBeforeDisable: number
   cachePath: string
   cacheTtlSeconds: number
   robotsTtlSeconds: number
@@ -80,6 +88,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     selectorTimeoutMs: number(env, "PAGEFETCH_SELECTOR_TIMEOUT_MS", 10_000),
     challengeBudgetMs: number(env, "PAGEFETCH_CHALLENGE_BUDGET_MS", 15_000),
     maxConcurrency: number(env, "PAGEFETCH_MAX_CONCURRENCY", 2),
+    minDomainIntervalSeconds: number(env, "PAGEFETCH_MIN_DOMAIN_INTERVAL_SECONDS", 5),
+    maxRequestsPerDomainHour: number(env, "PAGEFETCH_MAX_REQUESTS_PER_DOMAIN_HOUR", 20),
+    benchMinutes: number(env, "PAGEFETCH_BENCH_MINUTES", 60),
+    blocksBeforeDisable: number(env, "PAGEFETCH_BLOCKS_BEFORE_DISABLE", 3),
     cachePath: env.PAGEFETCH_CACHE_PATH ?? "/data/pagefetch.db",
     // A week. At a weekly collection cadence this means each page is fetched
     // exactly once, which is the entire economic argument for the service.

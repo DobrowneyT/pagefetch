@@ -202,7 +202,7 @@ closed set, and each has a defined answer to "should I retry?".
 | `blocked_challenge` | Interstitial; not reachable this way | **Stop.** Tell the human the page is unreachable. |
 | `blocked_robots` | Disallowed by `robots.txt` | **Stop.** This is policy, not a failure. Do not look for a workaround. |
 | `rate_limited` | Our own limiter | Retry after `retry_after` seconds |
-| `domain_benched` | Backoff after prior blocks | **Stop.** Report to the human. |
+| `domain_benched` | Backoff after prior blocks, or a domain disabled after repeated ones | **Stop.** Report to the human. |
 | `not_found` | 404 | Do not retry |
 | `timeout` | Render exceeded budget | Retry **once**, with a longer `wait_for` |
 | `invalid_url` | Rejected by URL validation | **Stop.** This is a bug in your code or an attack. |
@@ -235,12 +235,21 @@ is actionable. "Something went wrong fetching the page" is not.
 Enforced server-side. You cannot exceed them by insistence, and you should not
 try.
 
-| Control | Value |
-|---|---|
-| Per-domain | ≥ 5 s between requests, max 20/hour |
-| Global concurrency | 2 pages at once |
-| After a 429/403 | That domain is benched for 1 hour |
-| 3 blocks in a day | Domain disabled until manually re-enabled |
+| Control | Value | How it is enforced |
+|---|---|---|
+| Per-domain spacing | ≥ 5 s between requests | By **waiting**. Your call takes longer; it does not fail. |
+| Per-domain quota | max 20/hour | By **refusing**, with `retry_after`. |
+| Global concurrency | 2 pages at once | By queueing. |
+| After a 429/403 | That domain is benched for 1 hour | `domain_benched` |
+| 3 blocks in a day | Domain disabled until manually re-enabled | `domain_benched`, with the reason in `detail` |
+
+**`robots.txt` counts against the quota**, because it is a real request to the
+origin. The first fetch to a new domain therefore uses two of the twenty.
+
+**`domain_benched` covers both benched and disabled**, because your answer is the
+same for each: stop and report it. Which one it is appears in `detail`, where it
+is a human's decision rather than something for you to branch on. Only a person
+can lift a disable.
 
 Design your caller around these rather than against them. If you need thirty
 pages from one domain, that is a `fetch_pages` call that takes a while, not

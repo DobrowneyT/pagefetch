@@ -15,11 +15,15 @@ the bearer token in place. All three container security tests pass on the VPS.
 means no restrictions — while a challenge that hides robots means refused, and
 only "we read it and it says no" is `blocked_robots`.
 
-**Not built yet, and it matters:** the cache, the **rate limiter**, benching and
-disabling, the `/mcp` transport, and the other three tools. Without the limiter
-there is nothing but the global concurrency cap between an eager caller and the
-shared egress IP, so use it deliberately rather than leaving it running. The rest
-is in `docs/PRD.md` and issue #1.
+The cache is on SQLite (#5) — one store, also holding robots policy and domain
+state. The politeness caps are enforced server-side (#6): spacing by **waiting**,
+the hourly quota by **refusing** with `retry_after`, benching on a 403/429, and
+disabling after three blocks in a day. A disabled domain returns `domain_benched`
+and only a person can lift it: `docker compose exec pagefetch node dist/src/cli.js
+enable <host>`.
+
+**Not built yet:** the `/mcp` transport (#8) and the other three tools (#7). The
+rest is in `docs/PRD.md` and issue #1.
 
 ## Read first
 

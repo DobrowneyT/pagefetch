@@ -21,7 +21,16 @@ services:
     environment:
       # Three aliases for one fixture container, so robots.txt can present a real
       # policy, no file at all, and a policy behind a challenge.
-      PAGEFETCH_ALLOW_HOSTS: fixture,norobots-fixture,challengerobots-fixture,override-fixture
+      PAGEFETCH_ALLOW_HOSTS: fixture,norobots-fixture,challengerobots-fixture,override-fixture,ratelimit-fixture,spacing-fixture,bench-fixture,disable-fixture
+      # The general suite is not about politeness caps, and it makes far more
+      # than twenty requests to one fixture host. Caps are generous here and the
+      # limiter is exercised properly in its own stack — see compose.limits.yml.
+      # Benching is effectively off so a challenge fixture in one test cannot
+      # bench the host out from under the next one.
+      PAGEFETCH_MIN_DOMAIN_INTERVAL_SECONDS: "0.05"
+      PAGEFETCH_MAX_REQUESTS_PER_DOMAIN_HOUR: "1000"
+      PAGEFETCH_BENCH_MINUTES: "0.0001"
+      PAGEFETCH_BLOCKS_BEFORE_DISABLE: "1000"
       # Deliberately overriding one host, so the test suite can prove an override
       # works AND that it does not leak to any other host.
       PAGEFETCH_ROBOTS_OVERRIDE: override-fixture
@@ -52,6 +61,10 @@ services:
           - norobots-fixture
           - challengerobots-fixture
           - override-fixture
+          - ratelimit-fixture
+          - spacing-fixture
+          - bench-fixture
+          - disable-fixture
 
 volumes:
   pagefetch-test-data:

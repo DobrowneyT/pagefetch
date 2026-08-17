@@ -5,13 +5,12 @@ driving a real browser inside its own Docker container. Built for the
 `ai-scholarship-search` and `ai-job-search` skills; usable by any agent on any
 machine once access is granted.
 
-> **Status: partially built.** `fetch_page` works over `POST /fetch`, in the
-> container, with the security boundary in place and proven by test, and
-> `robots.txt` enforced. There is no cache, **no rate limiter**, no MCP transport
-> and no batch — without the limiter, only the global concurrency cap stands
-> between an eager caller and the shared egress IP, so use it deliberately rather
-> than leaving it running. The remaining requirements are in
-> [`docs/PRD.md`](docs/PRD.md) and filed as issue #1.
+> **Status: `fetch_page` is complete.** It works over `POST /fetch` in the
+> container, with the security boundary proven by test against the real VPS,
+> `robots.txt` enforced, the cache on SQLite, and the politeness caps enforced
+> server-side. Still to come: the `/mcp` transport and the other three tools
+> (`fetch_pages`, `check_reachable`, `cache_lookup`). The remaining requirements
+> are in [`docs/PRD.md`](docs/PRD.md) and filed as issue #1.
 
 ## What it solves
 

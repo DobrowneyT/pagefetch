@@ -69,6 +69,31 @@ CREATE TABLE IF NOT EXISTS robots (
   failure_detail TEXT,
   fetched_at_ms  INTEGER NOT NULL
 );
+
+-- One row per request we have committed to making, recorded at its SCHEDULED
+-- time rather than when it completes, so the hourly quota and the spacing stay
+-- correct when several fetches arrive at once.
+CREATE TABLE IF NOT EXISTS domain_requests (
+  host  TEXT NOT NULL,
+  at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS domain_requests_idx ON domain_requests(host, at_ms);
+
+-- One row per time a domain refused us. Blocks accumulate toward disabling.
+CREATE TABLE IF NOT EXISTS domain_blocks (
+  host  TEXT NOT NULL,
+  at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS domain_blocks_idx ON domain_blocks(host, at_ms);
+
+-- Benched and disabled are different states. Benched is a cooling-off we impose
+-- on ourselves and it expires; disabled is the escalation and requires a person.
+CREATE TABLE IF NOT EXISTS domain_state (
+  host             TEXT PRIMARY KEY,
+  benched_until_ms INTEGER NOT NULL DEFAULT 0,
+  disabled         INTEGER NOT NULL DEFAULT 0,
+  disabled_at_ms   INTEGER
+);
 `
 
 export class Store {
@@ -176,6 +201,101 @@ export class Store {
         entry.failure?.detail ?? null,
         entry.fetchedAtMs,
       )
+  }
+
+  // --- domain politeness state -------------------------------------------
+
+  domainState(host: string): { benchedUntilMs: number; disabled: boolean; disabledAtMs: number | null } {
+    const row = this.db.prepare("SELECT * FROM domain_state WHERE host = ?").get(host) as
+      | { benched_until_ms: number; disabled: number; disabled_at_ms: number | null }
+      | undefined
+    return {
+      benchedUntilMs: row?.benched_until_ms ?? 0,
+      disabled: Boolean(row?.disabled),
+      disabledAtMs: row?.disabled_at_ms ?? null,
+    }
+  }
+
+  setBench(host: string, untilMs: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO domain_state (host, benched_until_ms) VALUES (?, ?)
+         ON CONFLICT(host) DO UPDATE SET benched_until_ms = excluded.benched_until_ms`,
+      )
+      .run(host, untilMs)
+  }
+
+  setDisabled(host: string, disabled: boolean): void {
+    this.db
+      .prepare(
+        `INSERT INTO domain_state (host, disabled, disabled_at_ms) VALUES (?, ?, ?)
+         ON CONFLICT(host) DO UPDATE SET disabled = excluded.disabled, disabled_at_ms = excluded.disabled_at_ms`,
+      )
+      .run(host, disabled ? 1 : 0, disabled ? Date.now() : null)
+  }
+
+  /** Clears bench, disable, and the accumulated blocks. The operator's undo. */
+  enableDomain(host: string): void {
+    this.db.prepare("DELETE FROM domain_state WHERE host = ?").run(host)
+    this.db.prepare("DELETE FROM domain_blocks WHERE host = ?").run(host)
+  }
+
+  listDomains(): { host: string; benchedUntilMs: number; disabled: boolean; blocks: number }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT s.host, s.benched_until_ms, s.disabled,
+                (SELECT COUNT(*) FROM domain_blocks b WHERE b.host = s.host) AS blocks
+         FROM domain_state s ORDER BY s.host`,
+      )
+      .all() as { host: string; benched_until_ms: number; disabled: number; blocks: number }[]
+    return rows.map((row) => ({
+      host: row.host,
+      benchedUntilMs: row.benched_until_ms,
+      disabled: Boolean(row.disabled),
+      blocks: row.blocks,
+    }))
+  }
+
+  recordRequestAt(host: string, atMs: number): void {
+    this.db.prepare("INSERT INTO domain_requests (host, at_ms) VALUES (?, ?)").run(host, atMs)
+  }
+
+  /** The latest time we have already committed to hitting this host. */
+  lastScheduledMs(host: string): number {
+    const row = this.db.prepare("SELECT MAX(at_ms) AS latest FROM domain_requests WHERE host = ?").get(host) as
+      | { latest: number | null }
+      | undefined
+    return row?.latest ?? 0
+  }
+
+  countRequestsSince(host: string, sinceMs: number): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM domain_requests WHERE host = ? AND at_ms >= ?")
+      .get(host, sinceMs) as { n: number }
+    return row.n
+  }
+
+  oldestRequestSince(host: string, sinceMs: number): number | null {
+    const row = this.db
+      .prepare("SELECT MIN(at_ms) AS oldest FROM domain_requests WHERE host = ? AND at_ms >= ?")
+      .get(host, sinceMs) as { oldest: number | null } | undefined
+    return row?.oldest ?? null
+  }
+
+  recordBlock(host: string, atMs: number): void {
+    this.db.prepare("INSERT INTO domain_blocks (host, at_ms) VALUES (?, ?)").run(host, atMs)
+  }
+
+  countBlocksSince(host: string, sinceMs: number): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM domain_blocks WHERE host = ? AND at_ms >= ?")
+      .get(host, sinceMs) as { n: number }
+    return row.n
+  }
+
+  prune(requestsBeforeMs: number, blocksBeforeMs: number): void {
+    this.db.prepare("DELETE FROM domain_requests WHERE at_ms < ?").run(requestsBeforeMs)
+    this.db.prepare("DELETE FROM domain_blocks WHERE at_ms < ?").run(blocksBeforeMs)
   }
 
   close(): void {

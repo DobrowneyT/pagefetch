@@ -1,0 +1,22 @@
+# The politeness caps, at their real shape, for the limiter suite only.
+#
+#   docker compose -p pagefetch-limits \
+#     -f compose.yml -f compose.test.yml -f compose.limits.yml up -d
+#
+# Separate from the general suite because the two want opposite things: the
+# general suite makes far more than twenty requests to one fixture host and must
+# not be rate limited, while this stack exists to be rate limited.
+#
+# The only values bent from production are the two that would otherwise make the
+# suite take an hour: spacing is 0.2s rather than 5s, and a bench lasts 3s rather
+# than an hour. The caps that matter — 20 requests/hour, 3 blocks to disable —
+# are exactly the production numbers.
+
+services:
+  pagefetch:
+    container_name: pagefetch-limits
+    environment:
+      PAGEFETCH_MIN_DOMAIN_INTERVAL_SECONDS: "0.2"
+      PAGEFETCH_MAX_REQUESTS_PER_DOMAIN_HOUR: "20"
+      PAGEFETCH_BENCH_MINUTES: "0.05"
+      PAGEFETCH_BLOCKS_BEFORE_DISABLE: "3"

@@ -13,6 +13,10 @@ cd "$(dirname "$0")/.."
 # A separate project, so `down -v` below cannot reach the production volume —
 # which holds the persistent browser profile and the real cache.
 COMPOSE="docker compose -p pagefetch-test -f compose.yml -f compose.test.yml"
+# The limiter wants the opposite of what the general suite wants: the general
+# suite makes far more than twenty requests to one fixture host and must not be
+# rate limited, while this stack exists to be rate limited. So it gets its own.
+LIMITS="docker compose -p pagefetch-limits -f compose.yml -f compose.test.yml -f compose.limits.yml"
 NEIGHBOUR="${PAGEFETCH_NEIGHBOUR_CONTAINER:-tnl-dashboard-postgres-1}"
 NEIGHBOUR_PORT="${PAGEFETCH_NEIGHBOUR_PORT:-5432}"
 
@@ -23,7 +27,10 @@ fi
 
 # -v so every run starts from a cold cache and a cold profile. Scoped to the
 # pagefetch-test project by the -p above.
-cleanup() { $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true; }
+cleanup() {
+  $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
+  $LIMITS down -v --remove-orphans >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 
 echo "==> building"
@@ -103,6 +110,43 @@ if echo "$AFTER" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdi
 else
   echo "    FAIL: the cache did not survive a restart" >&2
   echo "$AFTER" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# The politeness caps, at their real values, in their own stack.
+# ---------------------------------------------------------------------------
+echo "==> limiter suite (real caps)"
+$COMPOSE down -v --remove-orphans >/dev/null 2>&1
+$LIMITS up -d >/dev/null
+
+for _ in $(seq 1 60); do
+  if curl -fsS http://127.0.0.1:8790/health >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+curl -fsS http://127.0.0.1:8790/health >/dev/null || { echo "limiter stack never became healthy"; $LIMITS logs pagefetch; exit 1; }
+
+# shellcheck disable=SC2086
+PAGEFETCH_URL="http://127.0.0.1:8790" node --test dist/test/limiter/*.test.js
+
+# ---------------------------------------------------------------------------
+# Disabling a domain is deliberately a decision a person has to undo, so there
+# has to be a way for a person to undo it.
+# ---------------------------------------------------------------------------
+echo "==> operator re-enable"
+$LIMITS exec -T pagefetch node dist/src/cli.js status | sed 's/^/    /'
+$LIMITS exec -T pagefetch node dist/src/cli.js enable disable-fixture | sed 's/^/    /'
+
+REENABLED=$(curl -sS -X POST http://127.0.0.1:8790/fetch \
+  -H "Authorization: Bearer $PAGEFETCH_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"tool":"fetch_page","arguments":{"url":"http://disable-fixture:3000/plain?re-enabled"}}')
+
+if echo "$REENABLED" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("code") == "ok" else 1)'; then
+  echo "    pass: a re-enabled domain is fetchable again"
+else
+  echo "    FAIL: the domain was still refused after being re-enabled" >&2
+  echo "$REENABLED" >&2
   exit 1
 fi
 

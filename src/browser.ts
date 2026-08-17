@@ -3,6 +3,7 @@ import type { Config } from "./config.js"
 import { result, type FetchResult } from "./codes.js"
 import { EgressProxy, REJECTED_HEADER } from "./egress-proxy.js"
 import { extract, render, type Format } from "./extract.js"
+import { Limiter } from "./limiter.js"
 import { Robots } from "./robots.js"
 import { Store } from "./store.js"
 import { validateUrl } from "./url-validation.js"
@@ -58,16 +59,19 @@ export class Browser {
   private readonly proxy: EgressProxy
   private readonly robots: Robots
   private readonly store: Store
+  private readonly limiter: Limiter
 
   constructor(private readonly config: Config) {
     this.gate = new Semaphore(config.maxConcurrency)
     this.proxy = new EgressProxy(config)
     this.store = new Store(config)
+    this.limiter = new Limiter(config, this.store)
     // Robots fetches through the raw path, not through fetchPage, or checking
-    // robots would require checking robots. It is also not page-cached — its
-    // policy lives in its own table with its own TTL.
+    // robots would require checking robots. It is not page-cached — its policy
+    // lives in its own table with its own TTL — but it DOES go through the
+    // limiter, because it is a real request to the origin like any other.
     this.robots = new Robots(config, this.store, (url) =>
-      this.gate.run(() => this.navigate({ url, format: "text" }, false)),
+      this.fetchThroughLimiter({ url, format: "text" }, false),
     )
   }
 
@@ -155,6 +159,12 @@ export class Browser {
       })
     }
 
+    // A benched or disabled domain is refused before anything reaches it — not
+    // even its robots.txt. Backing off means backing off.
+    const host = verdict.url.hostname.toLowerCase()
+    const available = this.limiter.gate(host)
+    if (!available.allowed) return result(available.code, { detail: available.detail })
+
     // Policy before network. A disallowed path must cost the origin nothing at
     // all beyond the robots.txt we already had to read.
     const permission = await this.robots.check(verdict.url)
@@ -162,7 +172,26 @@ export class Browser {
       return result(permission.code ?? "blocked_robots", { detail: permission.detail })
     }
 
-    return this.gate.run(() => this.navigate(request, true))
+    return this.fetchThroughLimiter(request, true)
+  }
+
+  /**
+   * Every request that actually reaches an origin passes through here.
+   *
+   * The spacing wait happens BEFORE the concurrency semaphore, so a fetch that
+   * is politely waiting five seconds is not also holding one of the two
+   * available browser slots.
+   */
+  private async fetchThroughLimiter(request: FetchRequest, cacheable: boolean): Promise<FetchResult> {
+    const host = new URL(request.url).hostname.toLowerCase()
+
+    const slot = this.limiter.acquire(host)
+    if (!slot.allowed) {
+      return result(slot.code, { detail: slot.detail, retry_after: slot.retryAfter })
+    }
+    if (slot.waitMs > 0) await new Promise((resolve) => setTimeout(resolve, slot.waitMs))
+
+    return this.gate.run(() => this.navigate(request, cacheable))
   }
 
   private async navigate(request: FetchRequest, cacheable: boolean): Promise<FetchResult> {
@@ -256,6 +285,11 @@ export class Browser {
 
       const settled = lastMainResponse ?? response
       const status = settled?.status() ?? null
+
+      // A refusal from the origin benches the domain. Recorded here, after the
+      // proxy-rejection check above, so our own 403 is never mistaken for one.
+      this.limiter.recordOutcome(new URL(request.url).hostname.toLowerCase(), status)
+
       const extracted = await extract(page)
 
       const blocked = this.classifyBlock(status, extracted.html, settled)
@@ -370,7 +404,7 @@ export class Browser {
     status: number | null,
     html: string,
     response: Response | null,
-  ): { code: "blocked_challenge" | "not_found"; detail: string } | null {
+  ): { code: "blocked_challenge" | "not_found" | "domain_benched"; detail: string } | null {
     if (status === 404) return { code: "not_found", detail: "origin returned 404" }
 
     // By now settleChallenge has given any interstitial its budget to clear, so
@@ -380,9 +414,12 @@ export class Browser {
 
     if (status === 403) return { code: "blocked_challenge", detail: "origin returned 403" }
 
-    // An origin 429 is a refusal we cannot politely back off from until benching
-    // exists, so it is reported as "stop" rather than "retry". Safe direction.
-    if (status === 429) return { code: "blocked_challenge", detail: "origin returned 429" }
+    // Benching exists now, so an origin 429 says what it is: we have been asked
+    // to back off, and we have. Subsequent requests get domain_benched from the
+    // gate before any of this runs.
+    if (status === 429) {
+      return { code: "domain_benched", detail: "origin returned 429; the domain is benched" }
+    }
 
     return null
   }
