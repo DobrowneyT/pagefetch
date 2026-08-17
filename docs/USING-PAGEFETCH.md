@@ -152,8 +152,23 @@ Returns `code`, `status`, `url_final`, `fetched_at`, `from_cache`, `content`.
 service captures on its own heuristic, which may catch a half-rendered page. If
 you are parsing award cards, wait for an award card.
 
+**`wait_for` applies to cached answers too.** It means "this content is not
+complete until the selector exists", so a cached page that does not contain the
+selector is not served — it is refetched. You cannot be handed a stored page
+that never had what you asked for. Verifying this costs no network traffic.
+
+**`fetched_at` on a cache hit is when the page was fetched, not when you read
+it.** That is the point of the field: it tells you whether you are reading
+something captured now or six days ago.
+
+**`max_age` is in seconds, and `0` forces a refresh.** Omit it to accept the
+server's TTL. Asking for the same page in a different `format` does **not**
+refetch — formats are derived from what was already stored.
+
 **Check `url_final`.** If a redirect landed somewhere unexpected, this is where
-you find out. Do not assume it equals the URL you sent.
+you find out. Do not assume it equals the URL you sent. Two URLs that redirect
+to the same place share one cache entry, so a request for one can be served from
+a fetch of the other.
 
 ### `fetch_pages`
 

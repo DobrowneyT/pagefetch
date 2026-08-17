@@ -10,7 +10,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-COMPOSE="docker compose -f compose.yml -f compose.test.yml"
+# A separate project, so `down -v` below cannot reach the production volume —
+# which holds the persistent browser profile and the real cache.
+COMPOSE="docker compose -p pagefetch-test -f compose.yml -f compose.test.yml"
 NEIGHBOUR="${PAGEFETCH_NEIGHBOUR_CONTAINER:-tnl-dashboard-postgres-1}"
 NEIGHBOUR_PORT="${PAGEFETCH_NEIGHBOUR_PORT:-5432}"
 
@@ -19,7 +21,9 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-cleanup() { $COMPOSE down --remove-orphans >/dev/null 2>&1 || true; }
+# -v so every run starts from a cold cache and a cold profile. Scoped to the
+# pagefetch-test project by the -p above.
+cleanup() { $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 echo "==> building"
@@ -71,6 +75,36 @@ set -a; source .env; set +a
 # and this works the same on both.
 # shellcheck disable=SC2086
 PAGEFETCH_URL="http://127.0.0.1:8790" node --test dist/test/container/*.test.js
+
+# ---------------------------------------------------------------------------
+# The cache must outlive the process. Restarting is the only honest way to
+# check that, so it happens here rather than inside the suite.
+# ---------------------------------------------------------------------------
+echo "==> cache survives a restart"
+CACHE_URL="http://fixture:3000/plain?restart-check"
+
+fetch_once() {
+  curl -sS -X POST http://127.0.0.1:8790/fetch \
+    -H "Authorization: Bearer $PAGEFETCH_TOKEN" \
+    -H "content-type: application/json" \
+    -d "{\"tool\":\"fetch_page\",\"arguments\":{\"url\":\"$CACHE_URL\"}}"
+}
+
+fetch_once >/dev/null
+$COMPOSE restart pagefetch >/dev/null
+for _ in $(seq 1 60); do
+  if curl -fsS http://127.0.0.1:8790/health >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+
+AFTER=$(fetch_once)
+if echo "$AFTER" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("from_cache") is True else 1)'; then
+  echo "    pass: served from cache after a restart"
+else
+  echo "    FAIL: the cache did not survive a restart" >&2
+  echo "$AFTER" >&2
+  exit 1
+fi
 
 echo
 echo "all container tests passed"

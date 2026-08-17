@@ -29,6 +29,7 @@
  */
 import type { Code, FetchResult } from "./codes.js"
 import type { Config } from "./config.js"
+import type { CachedRobots, Store } from "./store.js"
 
 export interface Rule {
   allow: boolean
@@ -122,18 +123,10 @@ export function isAllowed(rules: readonly Rule[], path: string): boolean {
   return best ? best.allow : true
 }
 
-interface CacheEntry {
-  at: number
-  rules: Rule[] | null
-  /** Set when robots could not be read at all. */
-  failure?: { code: Code; detail: string }
-}
-
 export class Robots {
-  private readonly cache = new Map<string, CacheEntry>()
-
   constructor(
     private readonly config: Config,
+    private readonly store: Store,
     /** Fetches a URL without consulting robots — otherwise this would recurse. */
     private readonly fetchRaw: (url: string) => Promise<FetchResult>,
   ) {}
@@ -165,32 +158,32 @@ export class Robots {
     }
   }
 
-  private async policyFor(target: URL): Promise<CacheEntry> {
+  private async policyFor(target: URL): Promise<CachedRobots> {
     const origin = target.origin
-    const cached = this.cache.get(origin)
-    if (cached && Date.now() - cached.at < this.config.robotsTtlSeconds * 1000) return cached
+    const cached = this.store.lookupRobots(origin, this.config.robotsTtlSeconds)
+    if (cached) return cached
 
     const entry = await this.fetchPolicy(origin)
-    this.cache.set(origin, entry)
+    this.store.storeRobots(origin, entry)
     return entry
   }
 
-  private async fetchPolicy(origin: string): Promise<CacheEntry> {
+  private async fetchPolicy(origin: string): Promise<CachedRobots> {
     const outcome = await this.fetchRaw(`${origin}/robots.txt`)
-    const at = Date.now()
+    const fetchedAtMs = Date.now()
 
     // No robots file. RFC 9309: absent means no restrictions apply.
-    if (outcome.code === "not_found") return { at, rules: [] }
+    if (outcome.code === "not_found") return { fetchedAtMs, rules: [] }
 
     if (outcome.code === "ok") {
       // A 2xx that is not actually a robots file (an HTML 404 page served with
       // status 200, say) parses to no rules, which is the same as no file.
-      return { at, rules: parseRobots(outcome.content ?? "") }
+      return { fetchedAtMs, rules: parseRobots(outcome.content ?? "") }
     }
 
     if (outcome.code === "blocked_challenge") {
       return {
-        at,
+        fetchedAtMs,
         rules: null,
         failure: {
           code: "blocked_challenge",
@@ -200,7 +193,7 @@ export class Robots {
     }
 
     return {
-      at,
+      fetchedAtMs,
       rules: null,
       failure: {
         code: outcome.code,

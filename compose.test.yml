@@ -11,6 +11,13 @@
 
 services:
   pagefetch:
+    # Its own name and its own volume. The suite tears down with `down -v` to get
+    # a cold cache and a cold profile each run, and that must never be able to
+    # reach the production store — which holds the persistent profile, the single
+    # most valuable piece of state this service keeps.
+    container_name: pagefetch-test
+    volumes:
+      - pagefetch-test-data:/data
     environment:
       # Three aliases for one fixture container, so robots.txt can present a real
       # policy, no file at all, and a policy behind a challenge.
@@ -45,3 +52,6 @@ services:
           - norobots-fixture
           - challengerobots-fixture
           - override-fixture
+
+volumes:
+  pagefetch-test-data:

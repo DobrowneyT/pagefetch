@@ -8,6 +8,8 @@ export interface Config {
   /** How long an interstitial gets to clear itself before we call it blocked. */
   challengeBudgetMs: number
   maxConcurrency: number
+  cachePath: string
+  cacheTtlSeconds: number
   robotsTtlSeconds: number
   /**
    * Hosts whose `robots.txt` is deliberately ignored.
@@ -78,6 +80,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     selectorTimeoutMs: number(env, "PAGEFETCH_SELECTOR_TIMEOUT_MS", 10_000),
     challengeBudgetMs: number(env, "PAGEFETCH_CHALLENGE_BUDGET_MS", 15_000),
     maxConcurrency: number(env, "PAGEFETCH_MAX_CONCURRENCY", 2),
+    cachePath: env.PAGEFETCH_CACHE_PATH ?? "/data/pagefetch.db",
+    // A week. At a weekly collection cadence this means each page is fetched
+    // exactly once, which is the entire economic argument for the service.
+    cacheTtlSeconds: number(env, "PAGEFETCH_CACHE_TTL_SECONDS", 604_800),
     robotsTtlSeconds: number(env, "PAGEFETCH_ROBOTS_TTL_SECONDS", 86_400),
     robotsOverride: hostSet(env.PAGEFETCH_ROBOTS_OVERRIDE),
     allowHosts: hostSet(env.PAGEFETCH_ALLOW_HOSTS),

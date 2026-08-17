@@ -32,6 +32,7 @@ interface FetchPageArgs {
   url: string
   format: Format
   waitFor?: string
+  maxAge?: number
 }
 
 function parseFetchPageArgs(raw: unknown): FetchPageArgs {
@@ -47,9 +48,16 @@ function parseFetchPageArgs(raw: unknown): FetchPageArgs {
     throw new ToolError(400, "wait_for must be a CSS selector string")
   }
 
-  // max_age is accepted and ignored until the cache exists. Rejecting it would
-  // break the shipped consumer, which already sends it.
-  return { url: args.url, format, waitFor: args.wait_for as string | undefined }
+  // `0` is meaningful — it forces a refresh — so this cannot use a falsy check.
+  let maxAge: number | undefined
+  if (args.max_age !== undefined) {
+    if (typeof args.max_age !== "number" || !Number.isFinite(args.max_age) || args.max_age < 0) {
+      throw new ToolError(400, "max_age must be a non-negative number of seconds; 0 forces a refresh")
+    }
+    maxAge = args.max_age
+  }
+
+  return { url: args.url, format, waitFor: args.wait_for as string | undefined, maxAge }
 }
 
 export async function callTool(browser: Browser, name: unknown, args: unknown): Promise<FetchResult> {

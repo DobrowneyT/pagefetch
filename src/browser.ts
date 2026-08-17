@@ -2,14 +2,17 @@ import { chromium, errors as playwrightErrors, type BrowserContext, type Page, t
 import type { Config } from "./config.js"
 import { result, type FetchResult } from "./codes.js"
 import { EgressProxy, REJECTED_HEADER } from "./egress-proxy.js"
-import { extract, type Format } from "./extract.js"
+import { extract, render, type Format } from "./extract.js"
 import { Robots } from "./robots.js"
+import { Store } from "./store.js"
 import { validateUrl } from "./url-validation.js"
 
 export interface FetchRequest {
   url: string
   format: Format
   waitFor?: string
+  /** Seconds. `0` forces a refresh. Omitted means the configured TTL. */
+  maxAge?: number
 }
 
 const CHALLENGE_POLL_MS = 500
@@ -54,13 +57,18 @@ export class Browser {
   private readonly gate: Semaphore
   private readonly proxy: EgressProxy
   private readonly robots: Robots
+  private readonly store: Store
 
   constructor(private readonly config: Config) {
     this.gate = new Semaphore(config.maxConcurrency)
     this.proxy = new EgressProxy(config)
+    this.store = new Store(config)
     // Robots fetches through the raw path, not through fetchPage, or checking
-    // robots would require checking robots.
-    this.robots = new Robots(config, (url) => this.gate.run(() => this.navigate({ url, format: "text" })))
+    // robots would require checking robots. It is also not page-cached — its
+    // policy lives in its own table with its own TTL.
+    this.robots = new Robots(config, this.store, (url) =>
+      this.gate.run(() => this.navigate({ url, format: "text" }, false)),
+    )
   }
 
   /**
@@ -118,6 +126,7 @@ export class Browser {
     this.context = null
     if (context) await context.close().catch(() => {})
     await this.proxy.close()
+    this.store.close()
   }
 
   async fetchPage(request: FetchRequest): Promise<FetchResult> {
@@ -127,6 +136,25 @@ export class Browser {
     const verdict = await validateUrl(request.url, this.config.allowHosts)
     if (!verdict.ok) return result("invalid_url", { detail: verdict.reason })
 
+    // The cache comes before everything, because a hit must cost nothing — no
+    // network, and no robots round trip either. We only ever store pages we were
+    // allowed to fetch in the first place.
+    const maxAge = request.maxAge ?? this.config.cacheTtlSeconds
+    const hit = this.store.lookupPage(request.url, maxAge)
+    // `wait_for` means "this content is not complete until the selector exists".
+    // That has to hold for a cached answer as well, or a caller who asked to
+    // wait for award cards could be handed a stored page that never had any and
+    // have no way to tell. Verified without touching the network.
+    if (hit && (!request.waitFor || (await this.cachedContentSatisfies(hit.html, request.waitFor)))) {
+      return result("ok", {
+        status: hit.status,
+        url_final: hit.urlFinal,
+        fetched_at: hit.fetchedAt,
+        from_cache: true,
+        content: render({ html: hit.html, text: hit.text }, request.format),
+      })
+    }
+
     // Policy before network. A disallowed path must cost the origin nothing at
     // all beyond the robots.txt we already had to read.
     const permission = await this.robots.check(verdict.url)
@@ -134,10 +162,10 @@ export class Browser {
       return result(permission.code ?? "blocked_robots", { detail: permission.detail })
     }
 
-    return this.gate.run(() => this.navigate(request))
+    return this.gate.run(() => this.navigate(request, true))
   }
 
-  private async navigate(request: FetchRequest): Promise<FetchResult> {
+  private async navigate(request: FetchRequest, cacheable: boolean): Promise<FetchResult> {
     const context = await this.ensureContext()
     const page = await context.newPage()
     const startedAt = Date.now()
@@ -156,6 +184,22 @@ export class Browser {
       }
     })
 
+    /**
+     * Hosts this page actually asked for, so a refusal can be attributed to the
+     * fetch that caused it. Without this, two overlapping fetches share the
+     * proxy's rejection log by time alone, and a slow page timing out while
+     * another fetch is refused elsewhere gets reported as `invalid_url` — the
+     * wrong code, and a confusing one.
+     */
+    const requestedHosts = new Set<string>()
+    page.on("request", (request) => {
+      try {
+        requestedHosts.add(new URL(request.url()).hostname.toLowerCase())
+      } catch {
+        // Not a URL we can attribute; the proxy would have refused it anyway.
+      }
+    })
+
     try {
       let response: Response | null
       try {
@@ -165,8 +209,11 @@ export class Browser {
         })
       } catch (error) {
         // An HTTPS hop the proxy refused fails the navigation outright, because
-        // a rejected CONNECT is not a response the browser can render.
-        const refused = this.proxy.rejectionsSince(startedAt)
+        // a rejected CONNECT is not a response the browser can render. Only
+        // refusals of hosts THIS page asked for count — see requestedHosts.
+        const refused = this.proxy
+          .rejectionsSince(startedAt)
+          .filter((rejection) => requestedHosts.has(rejection.host.toLowerCase()))
         if (refused.length > 0) {
           return result("invalid_url", { detail: `blocked at the hop: ${describe(refused)}` })
         }
@@ -209,18 +256,60 @@ export class Browser {
 
       const settled = lastMainResponse ?? response
       const status = settled?.status() ?? null
-      const html = await page.content()
+      const extracted = await extract(page)
 
-      const blocked = this.classifyBlock(status, html, settled)
+      const blocked = this.classifyBlock(status, extracted.html, settled)
       if (blocked) return result(blocked.code, { status, url_final: page.url(), detail: blocked.detail })
+
+      // The browser navigates redirects itself, so its own URL is the end of the
+      // chain, fragment included.
+      const urlFinal = page.url()
+      const fetchedAt = new Date().toISOString()
+
+      // Only successful fetches are cached. A challenge or a bench is a state of
+      // the domain, not a property of the page, and #6 owns how long those last
+      // — caching them here would quietly turn a one-hour bench into a 7-day one.
+      if (cacheable) {
+        this.store.storePage(request.url, {
+          urlFinal,
+          status,
+          html: extracted.html,
+          text: extracted.text,
+          fetchedAt,
+          fetchedAtMs: Date.now(),
+        })
+      }
 
       return result("ok", {
         status,
-        // The browser navigates redirects itself now, so its own URL is the end
-        // of the chain, fragment included.
-        url_final: page.url(),
-        content: await extract(page, request.format),
+        url_final: urlFinal,
+        fetched_at: fetchedAt,
+        content: render(extracted, request.format),
       })
+    } finally {
+      await page.close().catch(() => {})
+    }
+  }
+
+  /**
+   * Does stored content satisfy the caller's `wait_for`?
+   *
+   * Parsed in the browser rather than by pattern-matching the HTML, because a
+   * CSS selector deserves a CSS engine. Every request the page might make is
+   * aborted first, so this stays a true cache hit — no network traffic at all,
+   * which is the only definition of a hit this repo accepts.
+   */
+  private async cachedContentSatisfies(html: string, selector: string): Promise<boolean> {
+    const context = await this.ensureContext()
+    const page = await context.newPage()
+    try {
+      await page.route("**/*", (route) => route.abort().catch(() => {}))
+      await page.setContent(html, { waitUntil: "domcontentloaded" })
+      return (await page.$(selector)) !== null
+    } catch {
+      // An unusable selector, or content we could not parse. We cannot vouch for
+      // the hit, so we do not serve it.
+      return false
     } finally {
       await page.close().catch(() => {})
     }
