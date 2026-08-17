@@ -11,6 +11,7 @@ export interface FetchRequest {
 }
 
 const MAX_REDIRECTS = 10
+const CHALLENGE_POLL_MS = 500
 
 /** Markers a Cloudflare-style interstitial leaves behind even on a 200. */
 const CHALLENGE_MARKERS = [
@@ -120,6 +121,19 @@ export class Browser {
      * navigation ourselves, so `page.url()` still reports what was submitted.
      */
     let finalUrl = request.url
+    /**
+     * The most recent main-frame document response.
+     *
+     * `page.goto()` returns the FIRST one, which is the wrong one as soon as an
+     * interstitial navigates itself to the real page — we would hand back the
+     * challenge's 403 next to the content it eventually served.
+     */
+    let lastMainResponse: Response | null = null
+    page.on("response", (response) => {
+      if (response.frame() === page.mainFrame() && response.request().resourceType() === "document") {
+        lastMainResponse = response
+      }
+    })
 
     try {
       await page.route("**/*", async (route) => {
@@ -205,13 +219,18 @@ export class Browser {
         return result("invalid_url", { detail: `redirect hop rejected: ${blockedHops.join("; ")}` })
       }
 
+      // Let an interstitial clear itself before we judge it, and before the
+      // caller's wait_for runs — otherwise the selector is matched against the
+      // challenge page rather than the content.
+      await this.settleChallenge(page)
+
       if (request.waitFor) {
         try {
           await page.waitForSelector(request.waitFor, { timeout: this.config.selectorTimeoutMs })
         } catch (error) {
           if (error instanceof playwrightErrors.TimeoutError) {
             return result("timeout", {
-              status: response?.status() ?? null,
+              status: (lastMainResponse ?? response)?.status() ?? null,
               url_final: this.resolveFinalUrl(page, request.url, finalUrl),
               detail: `selector ${request.waitFor} did not appear within ${this.config.selectorTimeoutMs}ms`,
             })
@@ -220,11 +239,12 @@ export class Browser {
         }
       }
 
-      const status = response?.status() ?? null
+      const settled = lastMainResponse ?? response
+      const status = settled?.status() ?? null
       const urlFinal = this.resolveFinalUrl(page, request.url, finalUrl)
       const html = await page.content()
 
-      const blocked = this.classifyBlock(status, html, response)
+      const blocked = this.classifyBlock(status, html, settled)
       if (blocked) return result(blocked.code, { status, url_final: urlFinal, detail: blocked.detail })
 
       return result("ok", {
@@ -234,6 +254,51 @@ export class Browser {
       })
     } finally {
       await page.close().catch(() => {})
+    }
+  }
+
+  /** The interstitial's fingerprint, or null if this does not look like one. */
+  private challengeMarker(html: string, response: Response | null): string | null {
+    if (response?.headers()["cf-mitigated"]) return "cf-mitigated header"
+    const haystack = html.slice(0, 20_000).toLowerCase()
+    return CHALLENGE_MARKERS.find((marker) => haystack.includes(marker)) ?? null
+  }
+
+  /**
+   * Wait for a challenge interstitial to clear itself, up to a bounded budget.
+   *
+   * **This is not challenge solving and must never become it.** Nothing here
+   * misrepresents what the client is: no CAPTCHA service, no fingerprint
+   * patching, no stealth plugin, no UA games. Those stay out of scope.
+   *
+   * The distinction is that a managed challenge is *designed* to be passed by
+   * any real browser that executes its JavaScript and keeps a cookie jar. We
+   * are a real browser that does both. Reporting `blocked_challenge` at t≈0,
+   * as this did before, gave the wrong answer to a challenge a stock browser
+   * would have walked through — the PRD's whole premise is that a browser
+   * resolves this as a side effect of being a browser, and it needs a few
+   * seconds to do so.
+   *
+   * If it has not cleared within the budget, the answer is still
+   * `blocked_challenge`, and the answer is still stop.
+   */
+  private async settleChallenge(page: Page): Promise<void> {
+    const stillChallenged = async (): Promise<boolean> => {
+      try {
+        return this.challengeMarker(await page.content(), null) !== null
+      } catch {
+        // "Execution context was destroyed" means the page is navigating, which
+        // is exactly what a clearing challenge does. Treat it as in progress.
+        return true
+      }
+    }
+
+    if (!(await stillChallenged())) return
+
+    const deadline = Date.now() + this.config.challengeBudgetMs
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(CHALLENGE_POLL_MS)
+      if (!(await stillChallenged())) return
     }
   }
 
@@ -287,13 +352,10 @@ export class Browser {
   ): { code: "blocked_challenge" | "not_found"; detail: string } | null {
     if (status === 404) return { code: "not_found", detail: "origin returned 404" }
 
-    if (response?.headers()["cf-mitigated"]) {
-      return { code: "blocked_challenge", detail: "origin served a Cloudflare challenge (cf-mitigated)" }
-    }
-
-    const haystack = html.slice(0, 20_000).toLowerCase()
-    const marker = CHALLENGE_MARKERS.find((m) => haystack.includes(m))
-    if (marker) return { code: "blocked_challenge", detail: `interstitial detected (${marker})` }
+    // By now settleChallenge has given any interstitial its budget to clear, so
+    // a marker still being here means it did not.
+    const marker = this.challengeMarker(html, response)
+    if (marker) return { code: "blocked_challenge", detail: `interstitial did not clear (${marker})` }
 
     if (status === 403) return { code: "blocked_challenge", detail: "origin returned 403" }
 

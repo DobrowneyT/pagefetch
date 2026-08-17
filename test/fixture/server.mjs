@@ -44,6 +44,20 @@ const CHALLENGE_PAGE = `<!doctype html>
 <html><head><title>Just a moment...</title></head>
 <body><div id="challenge-form">Checking your browser before accessing the site.</div></body></html>`
 
+/**
+ * A *managed* challenge: an interstitial that clears itself once its script has
+ * run, which is what a real browser is supposed to experience. Note the link —
+ * the real interstitial has one too, which is why waiting on a bare `a[href]`
+ * selector buys no time at all.
+ */
+const CHALLENGE_CLEARS_PAGE = `<!doctype html>
+<html><head><title>Just a moment...</title></head>
+<body>
+  <div id="challenge-form">Checking your browser before accessing the site.</div>
+  <a href="/plain">continue</a>
+  <script>setTimeout(() => location.replace("/plain"), 2000)</script>
+</body></html>`
+
 const html = (res, status, body, headers = {}) => {
   res.writeHead(status, { "content-type": "text/html; charset=utf-8", ...headers })
   res.end(body)
@@ -54,6 +68,7 @@ const routes = {
   "/spa": (res) => html(res, 200, SPA_PAGE),
   "/challenge": (res) => html(res, 403, CHALLENGE_PAGE),
   "/challenge-200": (res) => html(res, 200, CHALLENGE_PAGE),
+  "/challenge-clears": (res) => html(res, 403, CHALLENGE_CLEARS_PAGE, { "cf-mitigated": "challenge" }),
   "/missing": (res) => html(res, 404, "<html><body>not here</body></html>"),
   "/plain": (res) => html(res, 200, "<html><body><h1>Plain page</h1><p>Static content.</p></body></html>"),
 

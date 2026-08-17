@@ -65,6 +65,35 @@ test("an interstitial is blocked_challenge, and we stop rather than escalate", a
   assert.equal(outcome.content, null)
 })
 
+test("a challenge that clears itself returns the content behind it", async () => {
+  // The regression that mattered: we used to judge the interstitial at t=0 and
+  // report blocked_challenge for a challenge a real browser walks straight
+  // through. No evasion is involved in passing this — the fixture clears itself
+  // for anything that runs its script.
+  const outcome = await fetchPage({ url: `${FIXTURE}/challenge-clears`, format: "text" })
+
+  assert.equal(outcome.code, "ok", `expected ok, got ${outcome.code}: ${outcome.detail}`)
+  assert.match(outcome.content ?? "", /Plain page/)
+})
+
+test("a cleared challenge reports the final page's status, not the interstitial's 403", async () => {
+  const outcome = await fetchPage({ url: `${FIXTURE}/challenge-clears`, format: "text" })
+  assert.equal(outcome.status, 200, "status must come from the page we actually returned")
+  assert.match(outcome.url_final ?? "", /\/plain$/)
+})
+
+test("a challenge that never clears is still blocked_challenge, within budget", async () => {
+  // The other half. Waiting must not become waiting forever, and an interstitial
+  // that does not clear is a definitive answer, not a timeout.
+  const started = Date.now()
+  const outcome = await fetchPage({ url: `${FIXTURE}/challenge` })
+  const elapsed = Date.now() - started
+
+  assert.equal(outcome.code, "blocked_challenge")
+  assert.equal(outcome.content, null)
+  assert.ok(elapsed < 20_000, `gave up after ${elapsed}ms; the budget must be bounded`)
+})
+
 test("an interstitial served with a 200 is still blocked_challenge", async () => {
   // Detecting this by status alone would call it a success and hand the caller
   // an interstitial to parse.

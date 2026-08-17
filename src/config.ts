@@ -5,6 +5,8 @@ export interface Config {
   profileDir: string
   navTimeoutMs: number
   selectorTimeoutMs: number
+  /** How long an interstitial gets to clear itself before we call it blocked. */
+  challengeBudgetMs: number
   maxConcurrency: number
   /**
    * Hostnames exempt from the private-address rejection.
@@ -56,6 +58,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     profileDir: env.PAGEFETCH_PROFILE_DIR ?? "/data/profile",
     navTimeoutMs: number(env, "PAGEFETCH_NAV_TIMEOUT_MS", 20_000),
     selectorTimeoutMs: number(env, "PAGEFETCH_SELECTOR_TIMEOUT_MS", 10_000),
+    challengeBudgetMs: number(env, "PAGEFETCH_CHALLENGE_BUDGET_MS", 15_000),
     maxConcurrency: number(env, "PAGEFETCH_MAX_CONCURRENCY", 2),
     allowHosts: new Set(
       (env.PAGEFETCH_ALLOW_HOSTS ?? "")

@@ -15,6 +15,9 @@ services:
       PAGEFETCH_ALLOW_HOSTS: fixture
       PAGEFETCH_NAV_TIMEOUT_MS: "8000"
       PAGEFETCH_SELECTOR_TIMEOUT_MS: "4000"
+      # Shorter than production so the suite stays quick. The fixture challenge
+      # clears in 2s, so this must comfortably exceed that.
+      PAGEFETCH_CHALLENGE_BUDGET_MS: "6000"
     depends_on:
       - fixture
 
