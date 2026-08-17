@@ -161,7 +161,11 @@ createServer((req, res) => {
     return res.end("{}")
   }
 
-  const key = `${host} ${path}`
+  // The query string is part of the key so tests can each use a distinct URL and
+  // assert on their own traffic. Test files run in parallel against one service,
+  // and counting by path alone would make every silence assertion a race.
+  const search = new URL(req.url, "http://fixture").search
+  const key = `${host} ${path}${search}`
   counts.set(key, (counts.get(key) ?? 0) + 1)
 
   if (path === "/robots.txt") return serveRobots(req, res)

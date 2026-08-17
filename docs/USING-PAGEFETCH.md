@@ -172,9 +172,27 @@ a fetch of the other.
 
 ### `fetch_pages`
 
-The same, for a list. Runs through the rate limiter **sequentially**, not in
-parallel — that is a feature, not a limitation. Use it for "fetch these thirty
-pages" rather than thirty round trips, and expect it to take real time.
+The same, for a list. Pass `urls` (max **50**) plus any of `format`, `wait_for`
+and `max_age`, which apply to every URL.
+
+Runs through the rate limiter **sequentially**, not in parallel — that is a
+feature, not a limitation. Use it for "fetch these thirty pages" rather than
+thirty round trips, and expect it to take real time.
+
+```json
+{
+  "code": "ok",
+  "results": [
+    { "url": "https://example.org/a", "code": "ok", "content": "…", "from_cache": false, "…": "…" },
+    { "url": "https://example.org/b", "code": "not_found", "content": null, "…": "…" }
+  ]
+}
+```
+
+**Each URL is independent, and the top-level `code` only says the batch ran.**
+Read the per-entry codes. A batch of thirty where one domain is benched returns
+twenty-nine results and one `domain_benched` — you asked about thirty pages and
+you get what is known about all thirty.
 
 ### `check_reachable`
 
@@ -184,10 +202,34 @@ A cheap probe: is this fetchable, is it already cached, is the domain benched.
 agents wasting time. Learning that a domain is benched costs one cheap call
 instead of thirty rate-limited failures.
 
+```json
+{
+  "code": "domain_benched",
+  "url": "https://example.org/awards",
+  "from_cache": false,
+  "fetched_at": null,
+  "domain": "benched",
+  "robots": "allowed",
+  "detail": "example.org is benched"
+}
+```
+
+`code` is what `fetch_page` **would return right now**, as far as can be known
+without asking the origin. `from_cache` tells you whether a fetch would be free.
+
+**`robots` may be `unknown`, and that is honest.** This tool makes no network
+request whatsoever — that is what makes it cheap — so if we have not already read
+that domain's `robots.txt`, we will not go and read it just to answer a probe.
+`unknown` means "we would have to ask", not "there is no policy".
+
 ### `cache_lookup`
 
 Read-only cache query. No network, no rate limit, free. Use it freely for
 re-reads of something you already fetched.
+
+**A miss is a clean miss, not an error**: `code: "ok"` with `from_cache: false`
+and `content: null`. Nothing you pass can make it fetch — that is the point of
+it being free.
 
 ---
 

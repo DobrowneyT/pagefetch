@@ -77,10 +77,12 @@ test("the service is not reachable on a non-loopback interface", async () => {
   )
 })
 
-test("an unimplemented tool says so rather than pretending", async () => {
-  const { httpStatus, body } = await call("cache_lookup", { url: "http://fixture:3000/plain" })
-  assert.equal(httpStatus, 501)
-  assert.match(String(body.error), /not built yet/)
+test("all four tools exist, and there is no fifth", async () => {
+  for (const tool of ["fetch_page", "fetch_pages", "check_reachable", "cache_lookup"]) {
+    const args = tool === "fetch_pages" ? { urls: ["http://fixture:3000/plain"] } : { url: "http://fixture:3000/plain" }
+    const { httpStatus } = await call(tool, args)
+    assert.equal(httpStatus, 200, `${tool} should be implemented`)
+  }
 })
 
 test("an unknown tool is a transport error, not a member of the code set", async () => {

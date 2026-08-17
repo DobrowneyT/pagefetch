@@ -168,6 +168,23 @@ export class Robots {
     }
   }
 
+  /**
+   * What we already know, without fetching anything.
+   *
+   * `check_reachable` and `cache_lookup` promise zero outbound requests, so they
+   * cannot go and read a policy they do not have. An unknown answer is an honest
+   * one; pretending would be worse than admitting it.
+   */
+  peek(target: URL): "allowed" | "disallowed" | "unknown" {
+    if (this.config.robotsOverride.has(target.hostname.toLowerCase())) return "allowed"
+
+    const cached = this.store.lookupRobots(target.origin, this.config.robotsTtlSeconds)
+    if (!cached) return "unknown"
+    if (cached.failure) return "unknown"
+
+    return isAllowed(cached.rules ?? [], `${target.pathname}${target.search}`) ? "allowed" : "disallowed"
+  }
+
   private async policyFor(target: URL): Promise<CachedRobots> {
     const origin = target.origin
     const cached = this.store.lookupRobots(origin, this.config.robotsTtlSeconds)

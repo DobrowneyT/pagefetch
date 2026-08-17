@@ -77,6 +77,13 @@ export class Limiter {
     return { allowed: true }
   }
 
+  /** The domain's state, for `check_reachable` to report without touching it. */
+  describe(host: string): "available" | "benched" | "disabled" {
+    const state = this.store.domainState(host)
+    if (state.disabled) return "disabled"
+    return state.benchedUntilMs > Date.now() ? "benched" : "available"
+  }
+
   /**
    * Reserve the right to make one request, and say how long to wait first.
    *

@@ -37,8 +37,7 @@ test("a second fetch inside the TTL is served from cache with zero network traff
   assert.equal(second.content, first.content)
 
   const seen = await counts()
-  const requests = Object.entries(seen).filter(([key]) => key.includes("/plain"))
-  assert.deepEqual(requests, [], `a cache hit made ${JSON.stringify(requests)} — that is not a cache hit`)
+  assert.equal(seen["fixture /plain?cache-silence"], undefined, "a cache hit hit the network — that is not a cache hit")
 })
 
 test("a hit reports when the page was actually fetched, not when it was read", async () => {
@@ -63,7 +62,7 @@ test("max_age 0 forces a refresh and the origin sees it", async () => {
   assert.equal(forced.from_cache, false, "max_age 0 must bypass the cache")
 
   const seen = await counts()
-  assert.equal(seen["fixture /plain"], 1, "the origin should have been asked exactly once")
+  assert.equal(seen["fixture /plain?cache-force"], 1, "the origin should have been asked exactly once")
 })
 
 test("an entry older than the requested max_age is refetched", async () => {
@@ -100,8 +99,7 @@ test("asking for a different format does not refetch", async () => {
   assert.match(asMarkdown.content ?? "", /^#+ Plain page/m)
 
   const seen = await counts()
-  const requests = Object.entries(seen).filter(([key]) => key.includes("/plain"))
-  assert.deepEqual(requests, [], "changing format caused a refetch")
+  assert.equal(seen["fixture /plain?cache-formats"], undefined, "changing format caused a refetch")
 })
 
 test("two URLs that redirect to the same place share one entry", async () => {
@@ -130,7 +128,7 @@ test("a cached page that satisfies wait_for is still a hit, and still silent", a
 
   // Verifying the selector must not reload the page's subresources.
   const seen = await counts()
-  assert.deepEqual(Object.entries(seen), [], `verifying wait_for made requests: ${JSON.stringify(seen)}`)
+  assert.equal(seen["fixture /csr?cache-waitfor"], undefined, "verifying wait_for made a request")
 })
 
 test("a cached page that does NOT satisfy wait_for is refetched, not served", async () => {

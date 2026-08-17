@@ -80,15 +80,20 @@ async function handle(req: IncomingMessage, res: ServerResponse, config: Config,
     const outcome = await callTool(browser, tool, args)
 
     // Structured, so patterns are visible without instrumenting the callers.
+    // Every tool result carries a `code`; the rest varies by tool, and a batch
+    // reports the codes of what it contained rather than one of its own.
+    const shared = outcome as Partial<{ status: number | null; detail: string }>
+    const batch = outcome as Partial<{ results: { code: string }[] }>
     console.log(
       JSON.stringify({
-        at: outcome.fetched_at,
+        at: new Date().toISOString(),
         tool,
         url: (args as Record<string, unknown>)?.url ?? null,
         code: outcome.code,
-        status: outcome.status,
+        status: shared.status ?? null,
         ms: Date.now() - started,
-        detail: outcome.detail ?? null,
+        detail: shared.detail ?? null,
+        ...(batch.results ? { batch: batch.results.map((entry) => entry.code) } : {}),
       }),
     )
 

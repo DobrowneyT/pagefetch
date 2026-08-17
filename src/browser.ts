@@ -1,6 +1,6 @@
 import { chromium, errors as playwrightErrors, type BrowserContext, type Page, type Response } from "playwright"
 import type { Config } from "./config.js"
-import { result, type FetchResult } from "./codes.js"
+import { result, type BatchResult, type FetchResult, type ReachableResult } from "./codes.js"
 import { EgressProxy, REJECTED_HEADER } from "./egress-proxy.js"
 import { extract, render, type Format } from "./extract.js"
 import { Limiter } from "./limiter.js"
@@ -173,6 +173,89 @@ export class Browser {
     }
 
     return this.fetchThroughLimiter(request, true)
+  }
+
+  /**
+   * A list, run **sequentially through the limiter** rather than in parallel.
+   * That is a feature: a batch must not be able to become an accidental flood.
+   *
+   * Each URL is independent. A batch of thirty where one domain is benched
+   * returns twenty-nine results and one `domain_benched`, not nothing — the
+   * caller asked about thirty pages and deserves what we know about all of them.
+   */
+  async fetchPages(requests: FetchRequest[]): Promise<BatchResult> {
+    const results: (FetchResult & { url: string })[] = []
+    for (const request of requests) {
+      results.push({ url: request.url, ...(await this.fetchPage(request)) })
+    }
+    return { code: "ok", results }
+  }
+
+  /**
+   * The cheap probe — the tool that stops agents wasting time, and the one the
+   * consumer documentation says to call first.
+   *
+   * It makes **no** outbound request. It must not fetch the page to discover
+   * whether the page can be fetched, and it must not fetch robots.txt to
+   * discover the policy: an unknown answer is honest, and a probe with a network
+   * cost is not a probe.
+   */
+  async checkReachable(url: string): Promise<ReachableResult> {
+    const verdict = await validateUrl(url, this.config.allowHosts)
+    if (!verdict.ok) {
+      return {
+        code: "invalid_url",
+        url,
+        from_cache: false,
+        fetched_at: null,
+        domain: "available",
+        robots: "unknown",
+        detail: verdict.reason,
+      }
+    }
+
+    const host = verdict.url.hostname.toLowerCase()
+    const domain = this.limiter.describe(host)
+    const robots = this.robots.peek(verdict.url)
+    const cached = this.store.lookupPage(url, this.config.cacheTtlSeconds)
+
+    const base = {
+      url,
+      from_cache: cached !== null,
+      fetched_at: cached?.fetchedAt ?? null,
+      domain,
+      robots,
+    }
+
+    // A cache hit needs neither the domain nor its policy — it costs nothing and
+    // touches nobody, so it is reachable whatever else is true.
+    if (cached) return { code: "ok", ...base }
+
+    if (domain !== "available") {
+      return { code: "domain_benched", ...base, detail: `${host} is ${domain}` }
+    }
+    if (robots === "disallowed") {
+      return { code: "blocked_robots", ...base, detail: `robots.txt for ${verdict.url.origin} disallows this path` }
+    }
+
+    return { code: "ok", ...base }
+  }
+
+  /**
+   * Read-only cache query. No network, no rate limit, free — so it can be used
+   * freely for re-reads. A miss is a clean miss, not an error.
+   */
+  cacheLookup(url: string, format: Format, maxAge: number | undefined): FetchResult {
+    const cached = this.store.lookupPage(url, maxAge ?? this.config.cacheTtlSeconds)
+    if (!cached) return result("ok", { detail: "not cached" })
+
+    return result("ok", {
+      status: cached.status,
+      url_final: cached.urlFinal,
+      fetched_at: cached.fetchedAt,
+      from_cache: true,
+      content: render({ html: cached.html, text: cached.text }, format),
+    })
   }
 
   /**

@@ -44,6 +44,35 @@ export interface FetchResult {
   detail?: string
 }
 
+/** `fetch_pages`. Each entry carries its own code — one refusal does not sink the batch. */
+export interface BatchResult {
+  /** The batch itself succeeded. The per-URL verdicts are in `results`. */
+  code: "ok"
+  results: (FetchResult & { url: string })[]
+}
+
+/**
+ * `check_reachable`. Everything here is answered from the store — no network.
+ *
+ * `code` is what `fetch_page` would return **right now**, as far as can be known
+ * without asking the origin. That is what makes the probe worth calling: an
+ * agent sees `domain_benched` and skips thirty rate-limited failures.
+ */
+export interface ReachableResult {
+  code: Code
+  url: string
+  /** Whether a fetch would be served from cache, i.e. whether it is free. */
+  from_cache: boolean
+  /** When the cached copy was fetched, or null if there is none. */
+  fetched_at: string | null
+  domain: "available" | "benched" | "disabled"
+  /** `unknown` when we have no cached policy — we will not fetch one to find out. */
+  robots: "allowed" | "disallowed" | "unknown"
+  detail?: string
+}
+
+export type ToolResult = FetchResult | BatchResult | ReachableResult
+
 export function result(code: Code, fields: Partial<FetchResult> = {}): FetchResult {
   return {
     code,

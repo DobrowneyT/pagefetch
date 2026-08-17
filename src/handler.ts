@@ -1,5 +1,5 @@
 import type { Browser } from "./browser.js"
-import type { FetchResult } from "./codes.js"
+import type { ToolResult } from "./codes.js"
 import { isFormat, type Format } from "./extract.js"
 
 /**
@@ -12,7 +12,11 @@ import { isFormat, type Format } from "./extract.js"
 export const TOOLS = ["fetch_page", "fetch_pages", "check_reachable", "cache_lookup"] as const
 export type ToolName = (typeof TOOLS)[number]
 
-const IMPLEMENTED: ReadonlySet<string> = new Set<ToolName>(["fetch_page"])
+/**
+ * A batch is a convenience, not a licence. Thirty pages is the design point, and
+ * an unbounded list would be a way to queue an afternoon of work in one call.
+ */
+const MAX_BATCH = 50
 
 /**
  * A problem with the request itself, not with the page. These are transport
@@ -60,15 +64,47 @@ function parseFetchPageArgs(raw: unknown): FetchPageArgs {
   return { url: args.url, format, waitFor: args.wait_for as string | undefined, maxAge }
 }
 
-export async function callTool(browser: Browser, name: unknown, args: unknown): Promise<FetchResult> {
+function requireObject(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "object" || raw === null) throw new ToolError(400, "arguments must be an object")
+  return raw as Record<string, unknown>
+}
+
+function requireUrl(args: Record<string, unknown>): string {
+  if (typeof args.url !== "string" || args.url === "") throw new ToolError(400, "arguments.url is required")
+  return args.url
+}
+
+export async function callTool(browser: Browser, name: unknown, args: unknown): Promise<ToolResult> {
   if (typeof name !== "string") throw new ToolError(400, "tool is required")
 
   if (!(TOOLS as readonly string[]).includes(name)) {
     throw new ToolError(400, `unknown tool "${name}"; expected one of ${TOOLS.join(", ")}`)
   }
-  if (!IMPLEMENTED.has(name)) {
-    throw new ToolError(501, `${name} is specified but not built yet; only fetch_page exists in this slice`)
-  }
 
-  return browser.fetchPage(parseFetchPageArgs(args))
+  switch (name as ToolName) {
+    case "fetch_page":
+      return browser.fetchPage(parseFetchPageArgs(args))
+
+    case "fetch_pages": {
+      const parsed = requireObject(args)
+      const urls = parsed.urls
+      if (!Array.isArray(urls) || urls.length === 0) {
+        throw new ToolError(400, "arguments.urls must be a non-empty array")
+      }
+      if (urls.length > MAX_BATCH) {
+        throw new ToolError(400, `arguments.urls has ${urls.length} entries; the maximum is ${MAX_BATCH}`)
+      }
+      // The shared options apply to every URL in the batch.
+      return browser.fetchPages(urls.map((url) => parseFetchPageArgs({ ...parsed, url })))
+    }
+
+    case "check_reachable": {
+      return browser.checkReachable(requireUrl(requireObject(args)))
+    }
+
+    case "cache_lookup": {
+      const parsed = parseFetchPageArgs(args)
+      return browser.cacheLookup(parsed.url, parsed.format, parsed.maxAge)
+    }
+  }
 }
