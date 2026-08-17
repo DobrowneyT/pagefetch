@@ -186,6 +186,7 @@ Every failure returns a code from this closed set. Adding a code is an API chang
 | `rate_limited` | Our own limiter | Yes, after `retry_after` |
 | `domain_benched` | Backoff after prior blocks | **No.** Report to the human. |
 | `not_found` | 404 | No |
+| `origin_error` | Origin broken or unreachable — 5xx, refused connection, DNS or TLS failure | Once, then report |
 | `timeout` | Render exceeded budget | Once, with a longer `wait_for` |
 | `invalid_url` | Rejected by URL validation | **No.** A bug or an attack. |
 

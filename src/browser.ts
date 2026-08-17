@@ -471,10 +471,10 @@ export class Browser {
         if (error instanceof playwrightErrors.TimeoutError) {
           return result("timeout", { detail: `navigation exceeded ${this.config.navTimeoutMs}ms` })
         }
-        // A refused connection, a DNS failure, a TLS error. The closed set has no
-        // member for "we could not reach it", and `timeout` is the only one whose
-        // retry advice ("once") is right for this. Reported honestly in `detail`.
-        return result("timeout", { detail: `navigation failed: ${(error as Error).message}` })
+        // A refused connection, a DNS failure, a TLS error. Not a timeout: the
+        // render budget was never the problem, and calling it one poisons the
+        // reachability data by making a dead host look like a slow one.
+        return result("origin_error", { detail: `navigation failed: ${(error as Error).message}` })
       }
 
       // A plain-HTTP hop the proxy refused comes back as a renderable 403, which
@@ -620,19 +620,12 @@ export class Browser {
     }
   }
 
-  /**
-   * Maps what the origin said onto the closed code set.
-   *
-   * Note the gap: the set has no member for "the origin is broken" (a 500). The
-   * consumer contract tells callers not to reach for pagefetch on a 500, so this
-   * returns `ok` with the honest numeric status rather than inventing a code.
-   * Tracked in #4.
-   */
+  /** Maps what the origin said onto the closed code set. */
   private classifyBlock(
     status: number | null,
     html: string,
     response: Response | null,
-  ): { code: "blocked_challenge" | "not_found" | "domain_benched"; detail: string } | null {
+  ): { code: "blocked_challenge" | "not_found" | "domain_benched" | "origin_error"; detail: string } | null {
     if (status === 404) return { code: "not_found", detail: "origin returned 404" }
 
     // By now settleChallenge has given any interstitial its budget to clear, so
@@ -647,6 +640,13 @@ export class Browser {
     // gate before any of this runs.
     if (status === 429) {
       return { code: "domain_benched", detail: "origin returned 429; the domain is benched" }
+    }
+
+    // Anything else non-2xx is the origin being broken rather than refusing us.
+    // Returning `ok` here, as this did before, meant a consumer honouring the
+    // contract would parse an error page as content.
+    if (status !== null && (status < 200 || status >= 300)) {
+      return { code: "origin_error", detail: `origin returned ${status}` }
     }
 
     return null

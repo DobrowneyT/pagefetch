@@ -4,12 +4,13 @@
 contract for consumers. You should not need to read the server's source to use
 it correctly, and if you find yourself doing so, that is a bug in this document.
 
-> **Status: not built yet.** The service is specified in [PRD.md](PRD.md) and
-> filed as issue #1. This document describes the contract it will honour, so
-> that consumers can be written against it and so the build has a fixed target.
-> Until it exists, every consumer must behave as though pagefetch is unconfigured
-> — see [When pagefetch is unavailable](#when-pagefetch-is-unavailable), which is
-> the normal case today.
+> **Status: built.** All four tools work over both transports. This document is
+> the contract the service honours, and it is kept ahead of the code rather than
+> behind it — if the two disagree, this document is the bug report.
+>
+> It remains **optional infrastructure**. Most people running a consuming repo
+> will never have it, so [When pagefetch is unavailable](#when-pagefetch-is-unavailable)
+> is still a first-class path and not an error path.
 
 ---
 
@@ -246,6 +247,7 @@ closed set, and each has a defined answer to "should I retry?".
 | `rate_limited` | Our own limiter | Retry after `retry_after` seconds |
 | `domain_benched` | Backoff after prior blocks, or a domain disabled after repeated ones | **Stop.** Report to the human. |
 | `not_found` | 404 | Do not retry |
+| `origin_error` | The origin is broken or unreachable — a 5xx, a refused connection, a DNS or TLS failure | Retry **once**, then report it. Not our problem to route around. |
 | `timeout` | Render exceeded budget | Retry **once**, with a longer `wait_for` |
 | `invalid_url` | Rejected by URL validation | **Stop.** This is a bug in your code or an attack. |
 

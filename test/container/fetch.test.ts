@@ -59,6 +59,32 @@ test("a 404 is not_found", async () => {
   assert.equal(outcome.status, 404)
 })
 
+test("a 500 is origin_error, never ok", async () => {
+  // Returning `ok` here meant a consumer honouring the contract would parse an
+  // error page as content. That is the failure mode the closed set exists to
+  // prevent, so it is worth a test of its own.
+  const outcome = await fetchPage({ url: `${FIXTURE}/broken` })
+
+  assert.equal(outcome.code, "origin_error", `expected origin_error, got ${outcome.code}: ${outcome.detail}`)
+  assert.equal(outcome.status, 500)
+  assert.equal(outcome.content, null, "a broken origin must not hand back its error page as content")
+})
+
+test("a 502 is origin_error too", async () => {
+  const outcome = await fetchPage({ url: `${FIXTURE}/gateway` })
+  assert.equal(outcome.code, "origin_error")
+  assert.equal(outcome.status, 502)
+})
+
+test("origin_error is distinct from timeout, so a dead host is not a slow one", async () => {
+  // The reachability data in #10 depends on telling these apart.
+  const broken = await fetchPage({ url: `${FIXTURE}/broken` })
+  const slow = await fetchPage({ url: `${FIXTURE}/slow` })
+
+  assert.equal(broken.code, "origin_error")
+  assert.equal(slow.code, "timeout")
+})
+
 test("an interstitial is blocked_challenge, and we stop rather than escalate", async () => {
   const outcome = await fetchPage({ url: `${FIXTURE}/challenge` })
   assert.equal(outcome.code, "blocked_challenge")

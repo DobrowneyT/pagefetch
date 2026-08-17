@@ -13,6 +13,7 @@ export const CODES = [
   "rate_limited",
   "domain_benched",
   "not_found",
+  "origin_error",
   "timeout",
   "invalid_url",
 ] as const

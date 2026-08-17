@@ -94,6 +94,8 @@ const routes = {
   "/challenge-200": (res) => html(res, 200, CHALLENGE_PAGE),
   "/challenge-clears": (res) => html(res, 403, CHALLENGE_CLEARS_PAGE, { "cf-mitigated": "challenge" }),
   "/missing": (res) => html(res, 404, "<html><body>not here</body></html>"),
+  "/broken": (res) => html(res, 500, "<html><body><h1>Internal Server Error</h1></body></html>"),
+  "/gateway": (res) => html(res, 502, "<html><body>bad gateway</body></html>"),
   "/plain": (res) => html(res, 200, "<html><body><h1>Plain page</h1><p>Static content.</p></body></html>"),
 
   // The bypass that matters: a perfectly public URL that redirects into the
