@@ -1,5 +1,16 @@
-import { chromium, errors as playwrightErrors, type BrowserContext, type Page, type Response } from "playwright"
+import { mkdir } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { join } from "node:path"
+import {
+  chromium,
+  errors as playwrightErrors,
+  type Browser as PlaywrightBrowser,
+  type BrowserContext,
+  type Page,
+  type Response,
+} from "playwright"
 import type { Config } from "./config.js"
+import { browserTreeRssBytes, stateFileName } from "./lifecycle.js"
 import { result, type BatchResult, type FetchResult, type ReachableResult } from "./codes.js"
 import { EgressProxy, REJECTED_HEADER } from "./egress-proxy.js"
 import { extract, render, type Format } from "./extract.js"
@@ -50,11 +61,22 @@ class Semaphore {
       this.waiting.shift()?.()
     }
   }
+
+  /** Resolves once nothing is in flight — how a restart drains rather than truncates. */
+  async idle(): Promise<void> {
+    while (this.active > 0) await new Promise((resolve) => setTimeout(resolve, 50))
+  }
 }
 
 export class Browser {
-  private context: BrowserContext | null = null
-  private starting: Promise<BrowserContext> | null = null
+  private browser: PlaywrightBrowser | null = null
+  private starting: Promise<PlaywrightBrowser> | null = null
+  /** One context per domain, most-recently-used last. Insertion order is the LRU. */
+  private readonly contexts = new Map<string, BrowserContext>()
+  private restarting: Promise<void> | null = null
+  private restarts = 0
+  private lastRestartAt: string | null = null
+  private readonly startedAt = Date.now()
   private readonly gate: Semaphore
   private readonly proxy: EgressProxy
   private readonly robots: Robots
@@ -75,23 +97,16 @@ export class Browser {
     )
   }
 
-  /**
-   * A persistent profile matters more than any other single choice here. A cold
-   * browser on every request looks far more robotic than one that has been to
-   * the site before and kept its cookies — most "Cloudflare blocked me" cases
-   * are a missing user agent, no cookie jar and no JavaScript, and a stock
-   * browser with a profile fixes all three by being what it claims to be.
-   *
-   * No stealth plugins, no fingerprint patching, no UA string games. Stock.
-   */
-  private async ensureContext(): Promise<BrowserContext> {
-    if (this.context) return this.context
+  /** One long-lived browser process; the cookie jars live in per-domain contexts. */
+  private async ensureBrowser(): Promise<PlaywrightBrowser> {
+    if (this.restarting) await this.restarting
+    if (this.browser) return this.browser
     if (this.starting) return this.starting
 
     this.starting = this.proxy
       .listen()
       .then(() =>
-        chromium.launchPersistentContext(this.config.profileDir, {
+        chromium.launch({
           headless: true,
           args: [
             // Chromium's default /dev/shm is 64MB inside Docker and it will
@@ -106,13 +121,13 @@ export class Browser {
           ],
         }),
       )
-      .then((context) => {
-        context.on("close", () => {
-          this.context = null
-          this.starting = null
+      .then((browser) => {
+        browser.on("disconnected", () => {
+          this.browser = null
+          this.contexts.clear()
         })
-        this.context = context
-        return context
+        this.browser = browser
+        return browser
       })
       .finally(() => {
         this.starting = null
@@ -121,16 +136,134 @@ export class Browser {
     return this.starting
   }
 
+  /**
+   * The persistent profile, per domain.
+   *
+   * Cookie jars stay separated because each domain gets its own context — a
+   * tracker on one site cannot see state from another. And each context is
+   * seeded from that domain's stored `storageState`, so we arrive as a returning
+   * visitor rather than a brand-new one.
+   *
+   * That second half is the part that matters most. A per-domain context which
+   * forgot its cookies on every restart would be strictly worse than the single
+   * shared profile it replaced — most "Cloudflare blocked me" cases are a
+   * missing user agent, no cookie jar and no JavaScript, and the cookie jar is
+   * the part we own.
+   *
+   * No stealth plugins, no fingerprint patching, no UA string games. Stock.
+   */
+  private async contextFor(host: string): Promise<BrowserContext> {
+    const existing = this.contexts.get(host)
+    if (existing) {
+      // Refresh LRU position.
+      this.contexts.delete(host)
+      this.contexts.set(host, existing)
+      return existing
+    }
+
+    const browser = await this.ensureBrowser()
+    await mkdir(this.config.profileDir, { recursive: true }).catch(() => {})
+
+    const statePath = join(this.config.profileDir, stateFileName(host))
+    const context = await browser.newContext(existsSync(statePath) ? { storageState: statePath } : {})
+
+    this.contexts.set(host, context)
+    await this.evictExcessContexts()
+    return context
+  }
+
+  private async evictExcessContexts(): Promise<void> {
+    while (this.contexts.size > this.config.maxContexts) {
+      const oldest = this.contexts.keys().next().value as string | undefined
+      if (oldest === undefined) return
+      await this.retireContext(oldest)
+    }
+  }
+
+  private async retireContext(host: string): Promise<void> {
+    const context = this.contexts.get(host)
+    this.contexts.delete(host)
+    if (!context) return
+    await this.saveState(host, context)
+    await context.close().catch(() => {})
+  }
+
+  /** Cookies are only persistent if they are written down. */
+  private async saveState(host: string, context: BrowserContext): Promise<void> {
+    try {
+      await mkdir(this.config.profileDir, { recursive: true })
+      await context.storageState({ path: join(this.config.profileDir, stateFileName(host)) })
+    } catch {
+      // A profile we could not save is a slower next visit, not a failed fetch.
+    }
+  }
+
   async isAlive(): Promise<boolean> {
-    return this.context !== null
+    return this.browser !== null
+  }
+
+  /** What an operator wants to know without making a fetch to find out. */
+  async stats(): Promise<Record<string, unknown>> {
+    return {
+      ok: true,
+      browser: this.browser ? "up" : "not started",
+      contexts: this.contexts.size,
+      rss_mb: Math.round((await this.browserRssBytes()) / 1_048_576),
+      uptime_seconds: Math.round((Date.now() - this.startedAt) / 1000),
+      restarts: this.restarts,
+      last_restart: this.lastRestartAt,
+      domains: this.store.domainSummary(),
+    }
   }
 
   async close(): Promise<void> {
-    const context = this.context
-    this.context = null
-    if (context) await context.close().catch(() => {})
+    for (const host of [...this.contexts.keys()]) await this.retireContext(host)
+    const browser = this.browser
+    this.browser = null
+    if (browser) await browser.close().catch(() => {})
     await this.proxy.close()
     this.store.close()
+  }
+
+  /** The proxy address appears in the browser's command line and nowhere else. */
+  private async browserRssBytes(): Promise<number> {
+    if (!this.browser) return 0
+    return browserTreeRssBytes(`--proxy-server=${this.proxy.address}`)
+  }
+
+  /**
+   * Restart the browser when it has grown too large. Chromium leaks over days
+   * and this is a multi-day process.
+   *
+   * It drains rather than truncates: in-flight fetches finish, and their cookies
+   * are written down, before anything is closed.
+   */
+  private async restartIfBloated(): Promise<void> {
+    if (this.restarting || !this.browser) return
+
+    const bytes = await this.browserRssBytes()
+    const limit = this.config.memoryRestartMb * 1_048_576
+    if (bytes < limit) return
+
+    const reason = `browser tree at ${Math.round(bytes / 1_048_576)}MB exceeded ${this.config.memoryRestartMb}MB`
+    this.restarting = this.drainAndRestart(reason).finally(() => {
+      this.restarting = null
+    })
+  }
+
+  private async drainAndRestart(reason: string): Promise<void> {
+    await this.gate.idle()
+
+    for (const host of [...this.contexts.keys()]) await this.retireContext(host)
+    const browser = this.browser
+    this.browser = null
+    if (browser) await browser.close().catch(() => {})
+
+    this.restarts += 1
+    this.lastRestartAt = new Date().toISOString()
+    console.log(
+      JSON.stringify({ at: this.lastRestartAt, event: "browser_restarted", reason, restarts: this.restarts }),
+    )
   }
 
   async fetchPage(request: FetchRequest): Promise<FetchResult> {
@@ -274,11 +407,17 @@ export class Browser {
     }
     if (slot.waitMs > 0) await new Promise((resolve) => setTimeout(resolve, slot.waitMs))
 
-    return this.gate.run(() => this.navigate(request, cacheable))
+    try {
+      return await this.gate.run(() => this.navigate(request, cacheable))
+    } finally {
+      // Checked after the slot is released, so the drain can actually drain.
+      void this.restartIfBloated()
+    }
   }
 
   private async navigate(request: FetchRequest, cacheable: boolean): Promise<FetchResult> {
-    const context = await this.ensureContext()
+    const host = new URL(request.url).hostname.toLowerCase()
+    const context = await this.contextFor(host)
     const page = await context.newPage()
     const startedAt = Date.now()
 
@@ -371,7 +510,7 @@ export class Browser {
 
       // A refusal from the origin benches the domain. Recorded here, after the
       // proxy-rejection check above, so our own 403 is never mistaken for one.
-      this.limiter.recordOutcome(new URL(request.url).hostname.toLowerCase(), status)
+      this.limiter.recordOutcome(host, status)
 
       const extracted = await extract(page)
 
@@ -382,6 +521,10 @@ export class Browser {
       // chain, fragment included.
       const urlFinal = page.url()
       const fetchedAt = new Date().toISOString()
+
+      // Write the jar down now rather than at shutdown, so an ungraceful stop
+      // does not cost us the cookies that make us a returning visitor.
+      await this.saveState(host, context)
 
       // Only successful fetches are cached. A challenge or a bench is a state of
       // the domain, not a property of the page, and #6 owns how long those last
@@ -417,7 +560,9 @@ export class Browser {
    * which is the only definition of a hit this repo accepts.
    */
   private async cachedContentSatisfies(html: string, selector: string): Promise<boolean> {
-    const context = await this.ensureContext()
+    // A throwaway context: this is parsing, not visiting, and it must not
+    // deposit anything in a domain's jar.
+    const context = await this.contextFor("__verify")
     const page = await context.newPage()
     try {
       await page.route("**/*", (route) => route.abort().catch(() => {}))

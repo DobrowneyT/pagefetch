@@ -102,17 +102,41 @@ test("asking for a different format does not refetch", async () => {
   assert.equal(seen[`fixture /plain?cache-formats-${tag}`], undefined, "changing format caused a refetch")
 })
 
-test("two URLs that redirect to the same place share one entry", async () => {
-  // Keyed on the final URL, so the second request is a hit even though it was
-  // asked for under a different name.
-  await fetchPage({ url: `${FIXTURE}/csr`, wait_for: ".award-card" })
+test("an entry is keyed on where a redirect landed, not what was asked for", async () => {
+  // Fetching a URL that redirects stores the page under its FINAL URL, so
+  // asking for that destination directly afterwards is free. Note the direction:
+  // the alias is learned by following the redirect once, so it is the second
+  // request that is free — the cache cannot know in advance where a redirect
+  // will land.
+  //
+  // Its own destination, because /csr is fetched by other files running in
+  // parallel and a shared target would make this assertion a race.
+  const destination = `?shared-${tag}`
+
+  const viaRedirect = await fetchPage({ url: `${FIXTURE}/redirect-preserving${destination}`, wait_for: ".award-card" })
+  assert.equal(viaRedirect.code, "ok", `expected ok, got ${viaRedirect.code}: ${viaRedirect.detail}`)
+  assert.match(viaRedirect.url_final ?? "", /\/csr/)
   await resetCounts()
 
-  const viaRedirect = await fetchPage({ url: `${FIXTURE}/redirect-to-csr`, wait_for: ".award-card" })
-  assert.equal(viaRedirect.code, "ok", `expected ok, got ${viaRedirect.code}: ${viaRedirect.detail}`)
+  const direct = await fetchPage({ url: `${FIXTURE}/csr${destination}`, wait_for: ".award-card" })
+  assert.equal(direct.from_cache, true, "the destination should already be cached under its final URL")
 
   const seen = await counts()
-  assert.equal(seen["fixture /csr"], undefined, "the shared destination was fetched again")
+  assert.equal(seen[`fixture /csr${destination}`], undefined, "the shared destination was fetched again")
+})
+
+test("asking again for the redirecting URL is free the second time", async () => {
+  const destination = `?alias-${tag}`
+
+  await fetchPage({ url: `${FIXTURE}/redirect-preserving${destination}`, wait_for: ".award-card" })
+  await resetCounts()
+
+  const again = await fetchPage({ url: `${FIXTURE}/redirect-preserving${destination}`, wait_for: ".award-card" })
+  assert.equal(again.from_cache, true, "the alias from requested URL to final URL was not recorded")
+
+  const seen = await counts()
+  assert.equal(seen[`fixture /redirect-preserving${destination}`], undefined, "the redirect was followed again")
+  assert.equal(seen[`fixture /csr${destination}`], undefined, "the destination was fetched again")
 })
 
 test("a cached page that satisfies wait_for is still a hit, and still silent", async () => {

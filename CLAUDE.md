@@ -22,8 +22,14 @@ disabling after three blocks in a day. A disabled domain returns `domain_benched
 and only a person can lift it: `docker compose exec pagefetch node dist/src/cli.js
 enable <host>`.
 
-**Not built yet:** the `/mcp` transport (#8) and the other three tools (#7). The
-rest is in `docs/PRD.md` and issue #1.
+All four tools exist and both transports run the same behavioural suite (#7, #8).
+The browser is one process with **one context per domain**, each seeded from that
+domain's stored `storageState` so cookies survive a restart, and it restarts
+itself when its process tree outgrows `PAGEFETCH_MEMORY_RESTART_MB` (#9).
+
+**Still open:** the `origin_error` decision (#4 — a 500 currently returns `ok`)
+and the reachability measurement tooling (#10). The rest is in `docs/PRD.md` and
+issue #1.
 
 ## Read first
 

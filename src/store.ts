@@ -256,6 +256,19 @@ export class Store {
     }))
   }
 
+  /** Counts for the health endpoint, so an operator can see trouble accumulating. */
+  domainSummary(): { benched: number; disabled: number } {
+    const row = this.db
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN disabled = 1 THEN 1 ELSE 0 END) AS disabled,
+           SUM(CASE WHEN disabled = 0 AND benched_until_ms > ? THEN 1 ELSE 0 END) AS benched
+         FROM domain_state`,
+      )
+      .get(Date.now()) as { benched: number | null; disabled: number | null }
+    return { benched: row.benched ?? 0, disabled: row.disabled ?? 0 }
+  }
+
   recordRequestAt(host: string, atMs: number): void {
     this.db.prepare("INSERT INTO domain_requests (host, at_ms) VALUES (?, ?)").run(host, atMs)
   }

@@ -5,12 +5,16 @@ driving a real browser inside its own Docker container. Built for the
 `ai-scholarship-search` and `ai-job-search` skills; usable by any agent on any
 machine once access is granted.
 
-> **Status: `fetch_page` is complete.** It works over `POST /fetch` in the
-> container, with the security boundary proven by test against the real VPS,
-> `robots.txt` enforced, the cache on SQLite, and the politeness caps enforced
-> server-side. Still to come: the `/mcp` transport and the other three tools
-> (`fetch_pages`, `check_reachable`, `cache_lookup`). The remaining requirements
-> are in [`docs/PRD.md`](docs/PRD.md) and filed as issue #1.
+> **Status: built.** All four tools, both transports, `robots.txt` enforced, the
+> cache on SQLite, the politeness caps enforced server-side, and the security
+> boundary proven by test against the real VPS. Every behavioural test runs
+> against `/fetch` and `/mcp` alike.
+>
+> **What it does not do is measured, not assumed:** the Cloudflare-protected
+> aggregator that prompted this build refuses a stock browser, so the honest
+> return is zero of the five aggregators — see issue #10 and the table below.
+> What it does deliver is client-side-rendered pages, fragment routes, and the
+> end of the wasted-discovery loop.
 
 ## What it solves
 

@@ -58,7 +58,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, config: Config,
   // Unauthenticated on purpose: it reveals nothing, it is loopback-only, and a
   // container healthcheck should not need the bearer token baked into compose.
   if (path === "/health" && req.method === "GET") {
-    send(res, 200, { ok: true, browser: (await browser.isAlive()) ? "up" : "not started" })
+    send(res, 200, await browser.stats())
     return
   }
 

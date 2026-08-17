@@ -121,9 +121,25 @@ const routes = {
     setTimeout(() => html(res, 200, "<html><body>eventually</body></html>"), 60_000)
   },
 
+  // Cookie-jar fixtures. The jar is the part of the persistent profile we own,
+  // and the part that makes us a returning visitor rather than a new one.
+  "/set-cookie": (res) => {
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "set-cookie": "pfjar=remembered; Path=/",
+    })
+    res.end("<html><body><h1>Cookie set</h1></body></html>")
+  },
+
   // Under the disallowed subtree, and the exception inside it.
   "/private/secret": (res) => html(res, 200, "<html><body><h1>Secret</h1></body></html>"),
   "/private/public/ok": (res) => html(res, 200, "<html><body><h1>Public exception</h1></body></html>"),
+}
+
+/** Echoes back whatever jar the browser presented, so tests can see it. */
+function serveShowCookie(req, res) {
+  const jar = req.headers.cookie ?? "none"
+  html(res, 200, `<html><body><h1>Cookies</h1><p id="jar">${jar}</p></body></html>`)
 }
 
 /**
@@ -169,6 +185,13 @@ createServer((req, res) => {
   counts.set(key, (counts.get(key) ?? 0) + 1)
 
   if (path === "/robots.txt") return serveRobots(req, res)
+  if (path === "/show-cookie") return serveShowCookie(req, res)
+  // Preserves the query string, so a test can own its own redirect destination
+  // rather than sharing /csr with every other file in the suite.
+  if (path === "/redirect-preserving") {
+    res.writeHead(302, { location: `/csr${search}` })
+    return res.end()
+  }
 
   const route = routes[path]
   if (route) return route(res)

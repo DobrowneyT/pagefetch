@@ -30,6 +30,8 @@ fi
 cleanup() {
   $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
   $LIMITS down -v --remove-orphans >/dev/null 2>&1 || true
+  docker compose -p pagefetch-memory -f compose.yml -f compose.test.yml -f compose.memory.yml \
+    down -v --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -122,6 +124,21 @@ else
   exit 1
 fi
 
+# The persistent profile is the single most valuable state this service keeps.
+# A per-domain context that forgot its cookies on restart would be worse than
+# the shared profile it replaced, so this is checked rather than assumed.
+COOKIES=$(curl -sS -X POST http://127.0.0.1:8790/fetch \
+  -H "Authorization: Bearer $PAGEFETCH_TOKEN" -H "content-type: application/json" \
+  -d '{"tool":"fetch_page","arguments":{"url":"http://fixture:3000/show-cookie?after-restart","format":"text","max_age":0}}')
+
+if echo "$COOKIES" | grep -q "pfjar=remembered"; then
+  echo "    pass: the cookie jar survived a restart"
+else
+  echo "    FAIL: cookies were lost across a restart" >&2
+  echo "$COOKIES" >&2
+  exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # The politeness caps, at their real values, in their own stack.
 # ---------------------------------------------------------------------------
@@ -158,6 +175,42 @@ else
   echo "$REENABLED" >&2
   exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Crossing the memory threshold must restart the browser, and the next fetch
+# must still succeed. Tested with a threshold no real browser can stay under.
+# ---------------------------------------------------------------------------
+echo "==> memory restart"
+$LIMITS down -v --remove-orphans >/dev/null 2>&1
+MEMORY="docker compose -p pagefetch-memory -f compose.yml -f compose.test.yml -f compose.memory.yml"
+$MEMORY up -d >/dev/null
+
+for _ in $(seq 1 60); do
+  if curl -fsS http://127.0.0.1:8790/health >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+
+memory_fetch() {
+  curl -sS -X POST http://127.0.0.1:8790/fetch \
+    -H "Authorization: Bearer $PAGEFETCH_TOKEN" -H "content-type: application/json" \
+    -d "{\"tool\":\"fetch_page\",\"arguments\":{\"url\":\"http://fixture:3000/plain?mem=$1\",\"max_age\":0}}"
+}
+
+memory_fetch 1 >/dev/null
+sleep 3
+SECOND=$(memory_fetch 2)
+RESTARTS=$(curl -sS http://127.0.0.1:8790/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["restarts"])')
+
+if echo "$SECOND" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("code") == "ok" else 1)' \
+  && [ "$RESTARTS" -ge 1 ]; then
+  echo "    pass: browser restarted ($RESTARTS) and the next fetch still succeeded"
+else
+  echo "    FAIL: expected a restart and a working fetch; restarts=$RESTARTS" >&2
+  echo "$SECOND" >&2
+  exit 1
+fi
+
+$MEMORY down -v --remove-orphans >/dev/null 2>&1
 
 echo
 echo "all container tests passed"
