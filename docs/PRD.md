@@ -22,21 +22,25 @@ The second problem is that the failure is currently silent and unstructured. A 4
 
 **Most sites that block us are blocking by robots policy, not by bot detection, and this service will not unlock them.** Measured against the scholarship aggregators that prompted this work:
 
-> **Measured 2026-08-17: the prediction below was wrong, and the answer is zero
-> of five, not one.** `scholarshipscanada.com` was probed across three
-> implementations — the tracer, after challenge-settling (#11), and behind the
-> validating egress proxy with the browser's own TLS (#3). Every attempt returned
-> `blocked_challenge`. Results and what this build *did* deliver are in issue #10.
-> The table is left as written, because a prediction is more useful next to its
-> outcome than quietly corrected.
+> **Measured 2026-08-17. The prediction below was wrong twice, and the answer for
+> usable listing data is zero of five.** Full results, and the tooling that
+> produced them, are in [`docs/reachability/RESULTS.md`](reachability/RESULTS.md)
+> and issue #10. The table is left as written, because a prediction is more
+> useful next to its outcome than quietly corrected.
 
-| Site | Nature of the block | Does pagefetch help? |
+| Site | Predicted | Measured 2026-08-17 |
 |---|---|---|
-| `scholarshipscanada.com` | Cloudflare managed challenge | **Predicted likely yes — measured no** |
-| `findaphd.com` | 403 **and** robots `Disallow: /` | No — robots policy |
-| `scholarship-search.org.uk` | robots `Disallow: /` | No — robots policy |
-| `grants-search.turn2us.org.uk` | robots `Disallow: /` | No — robots policy |
-| `scholartree.ca` | robots disallows `/scholarships` | No — robots policy |
+| `scholarshipscanada.com` | Cloudflare challenge — **likely yes** | `blocked_challenge`. Probed across three implementations — the tracer, after challenge-settling (#11), and behind the validating egress proxy with the browser's own TLS (#3). It refuses a stock browser. |
+| `findaphd.com` | 403 **and** robots `Disallow: /` | `blocked_challenge` — we never got far enough to read its robots. |
+| `scholarship-search.org.uk` | robots `Disallow: /` | `blocked_challenge` — its `robots.txt` is *itself* behind the challenge, so its policy is unknowable. |
+| `grants-search.turn2us.org.uk` | robots `Disallow: /` | **Prediction wrong.** Its robots says `Allow: /$` then `Disallow: /`, so under RFC 9309 longest-match the homepage is explicitly allowed and every listing path is not. `/` returns `ok`; `/search` returns `blocked_robots`. |
+| `scholartree.ca` | robots disallows `/scholarships` | `blocked_robots`. Prediction correct. |
+
+**Two of the five turned out to hide their `robots.txt` behind a challenge**,
+which the design did not anticipate: "check robots before fetching" is circular
+when the policy is unreadable. That case now refuses the domain and reports
+`blocked_challenge`, because inferring permission from a page we could not read
+would resolve every ambiguity in our own favour.
 
 pagefetch respects `robots.txt` by default. A site that has said "do not crawl this" is not a technical obstacle to route around; it is an answer. So the honest expected return on this build is **one** currently-blocked aggregator, plus every future site that turns out to be client-side rendered, plus the elimination of the wasted-discovery loop across every agent and repo. That is a reasonable return, and it is smaller than "unblocks the sites we cannot reach today".
 

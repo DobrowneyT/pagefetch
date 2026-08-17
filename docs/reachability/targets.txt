@@ -1,0 +1,12 @@
+# The five scholarship aggregators that prompted this build.
+# The PRD predicted one of them would be unlocked; this list is how that
+# prediction gets checked rather than assumed.
+#
+# Adding a target here means real requests to a real site. Do that deliberately.
+
+https://www.scholarshipscanada.com/
+https://www.findaphd.com/
+https://www.scholarship-search.org.uk/
+https://grants-search.turn2us.org.uk/
+https://scholartree.ca/scholarships
+https://grants-search.turn2us.org.uk/search
