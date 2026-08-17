@@ -108,11 +108,18 @@ to avoid.
 
 ## Expectations to keep honest
 
-This unlocks **one** of the five aggregators that prompted it. The other four
-block by `robots.txt` policy, which this service respects and will not route
-around. The value is that one site, plus client-side-rendered sites generally,
-plus removing the wasted-discovery loop. The table is in the PRD's problem
-statement — read it before claiming the build succeeded or failed.
+The PRD predicted this unlocks **one** of the five aggregators. **Measured
+2026-08-17, it unlocks none of them.** `scholarshipscanada.com` refuses a stock
+browser with a persistent profile over its own TLS — probed across three
+implementations, all `blocked_challenge`. The other four block by `robots.txt`
+policy, which this service respects and will not route around. See issue #10.
+
+That is not the same as the build failing. What it delivers is
+client-side-rendered pages (verified end to end), fragment routes, and the
+removal of the wasted-discovery loop — a fast honest `blocked_challenge` instead
+of a retry spiral. Read issue #10 and the PRD's table before claiming the build
+succeeded or failed, and **do not treat the refused aggregator as a problem to
+solve.** It is a site that has decided, and the answer is to stop.
 
 ## Issues
 

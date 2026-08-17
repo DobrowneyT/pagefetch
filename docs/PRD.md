@@ -22,9 +22,17 @@ The second problem is that the failure is currently silent and unstructured. A 4
 
 **Most sites that block us are blocking by robots policy, not by bot detection, and this service will not unlock them.** Measured against the scholarship aggregators that prompted this work:
 
+> **Measured 2026-08-17: the prediction below was wrong, and the answer is zero
+> of five, not one.** `scholarshipscanada.com` was probed across three
+> implementations — the tracer, after challenge-settling (#11), and behind the
+> validating egress proxy with the browser's own TLS (#3). Every attempt returned
+> `blocked_challenge`. Results and what this build *did* deliver are in issue #10.
+> The table is left as written, because a prediction is more useful next to its
+> outcome than quietly corrected.
+
 | Site | Nature of the block | Does pagefetch help? |
 |---|---|---|
-| `scholarshipscanada.com` | Cloudflare managed challenge | **Likely yes** |
+| `scholarshipscanada.com` | Cloudflare managed challenge | **Predicted likely yes — measured no** |
 | `findaphd.com` | 403 **and** robots `Disallow: /` | No — robots policy |
 | `scholarship-search.org.uk` | robots `Disallow: /` | No — robots policy |
 | `grants-search.turn2us.org.uk` | robots `Disallow: /` | No — robots policy |
