@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { call, fetchPage } from "./client.js"
+import { call, fetchPage, tag } from "./client.js"
 
 const FIXTURE = "http://fixture:3000"
 const FIXTURE_ADMIN = process.env.FIXTURE_ADMIN_URL ?? "http://127.0.0.1:3100"
@@ -78,7 +78,7 @@ test("check_reachable makes no outbound request at all", async () => {
 })
 
 test("check_reachable reports whether a fetch would be free", async () => {
-  const url = `${FIXTURE}/plain?probe-cached`
+  const url = `${FIXTURE}/plain?probe-cached-${tag}`
 
   const before = await call("check_reachable", { url })
   assert.equal(before.body.from_cache, false)
@@ -93,7 +93,7 @@ test("check_reachable reports whether a fetch would be free", async () => {
 
 test("check_reachable reports a disallowed path without fetching it", async () => {
   // Warm the policy so the probe has something to answer from.
-  await fetchPage({ url: `${FIXTURE}/plain?probe-warm` })
+  await fetchPage({ url: `${FIXTURE}/plain?probe-warm-${tag}` })
   await resetCounts()
 
   const { body } = await call("check_reachable", { url: `${FIXTURE}/private/secret` })
@@ -120,7 +120,7 @@ test("check_reachable rejects a private address", async () => {
 // --- cache_lookup -----------------------------------------------------------
 
 test("cache_lookup returns cached content with no network traffic", async () => {
-  const url = `${FIXTURE}/plain?lookup-hit`
+  const url = `${FIXTURE}/plain?lookup-hit-${tag}`
   await fetchPage({ url })
   await resetCounts()
 
@@ -130,7 +130,7 @@ test("cache_lookup returns cached content with no network traffic", async () => 
   assert.match(String(body.content), /Plain page/)
 
   const seen = await counts()
-  assert.equal(seen["fixture /plain?lookup-hit"], undefined, "cache_lookup made a request")
+  assert.equal(seen[`fixture /plain?lookup-hit-${tag}`], undefined, "cache_lookup made a request")
 })
 
 test("cache_lookup on an uncached URL is a clean miss, not an error", async () => {
@@ -148,16 +148,16 @@ test("cache_lookup cannot be made to fetch by any argument", async () => {
   await resetCounts()
 
   for (const extra of [{ max_age: 0 }, { force: true }, { refresh: true }, { wait_for: ".award-card" }]) {
-    const { body } = await call("cache_lookup", { url: `${FIXTURE}/plain?lookup-force`, ...extra })
+    const { body } = await call("cache_lookup", { url: `${FIXTURE}/plain?lookup-force-${tag}`, ...extra })
     assert.equal(body.code, "ok")
   }
 
   const seen = await counts()
-  assert.equal(seen["fixture /plain?lookup-force"], undefined, "cache_lookup fetched")
+  assert.equal(seen[`fixture /plain?lookup-force-${tag}`], undefined, "cache_lookup fetched")
 })
 
 test("cache_lookup serves a different format from the same entry", async () => {
-  const url = `${FIXTURE}/plain?lookup-format`
+  const url = `${FIXTURE}/plain?lookup-format-${tag}`
   await fetchPage({ url, format: "html" })
   await resetCounts()
 
@@ -166,5 +166,5 @@ test("cache_lookup serves a different format from the same entry", async () => {
   assert.match(String(body.content), /^#+ Plain page/m)
 
   const seen = await counts()
-  assert.equal(seen["fixture /plain?lookup-format"], undefined, "changing format on a lookup caused a fetch")
+  assert.equal(seen[`fixture /plain?lookup-format-${tag}`], undefined, "changing format on a lookup caused a fetch")
 })

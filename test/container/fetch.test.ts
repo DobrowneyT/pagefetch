@@ -1,13 +1,13 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { fetchPage } from "./client.js"
+import { fetchPage, tag } from "./client.js"
 
 const FIXTURE = "http://fixture:3000"
 
 test("the premise: a client-side-rendered page returns its rendered content", async () => {
   // Plain HTTP gets an empty shell here. This is the whole reason the service
   // exists, so if this fails nothing else matters.
-  const outcome = await fetchPage({ url: `${FIXTURE}/csr`, format: "html", wait_for: ".award-card" })
+  const outcome = await fetchPage({ url: `${FIXTURE}/csr?premise-${tag}`, format: "html", wait_for: ".award-card" })
 
   assert.equal(outcome.code, "ok", `expected ok, got ${outcome.code}: ${outcome.detail}`)
   assert.equal(outcome.status, 200)

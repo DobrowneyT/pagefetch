@@ -75,13 +75,22 @@ fi
 # ---------------------------------------------------------------------------
 # The behavioural suite, at the transport boundary.
 # ---------------------------------------------------------------------------
-echo "==> behavioural suite"
 npm run build >/dev/null
 set -a; source .env; set +a
-# Unquoted on purpose: the shell expands it. Node 20 cannot glob, Node 22+ can,
-# and this works the same on both.
+export PAGEFETCH_URL="http://127.0.0.1:8790"
+
+# Every behavioural test runs against BOTH transports, because the whole point
+# of one handler is that semantics do not diverge. Unquoted globs on purpose:
+# the shell expands them, which works on Node 20 and Node 22+ alike.
+for TRANSPORT in fetch mcp; do
+  echo "==> behavioural suite (/$TRANSPORT)"
+  # shellcheck disable=SC2086
+  PAGEFETCH_TRANSPORT="$TRANSPORT" node --test dist/test/container/*.test.js
+done
+
+echo "==> MCP protocol suite"
 # shellcheck disable=SC2086
-PAGEFETCH_URL="http://127.0.0.1:8790" node --test dist/test/container/*.test.js
+node --test dist/test/mcp/*.test.js
 
 # ---------------------------------------------------------------------------
 # The cache must outlive the process. Restarting is the only honest way to

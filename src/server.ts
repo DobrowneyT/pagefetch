@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto"
 import type { Browser } from "./browser.js"
 import type { Config } from "./config.js"
 import { callTool, ToolError } from "./handler.js"
+import { handleMcp } from "./mcp.js"
 
 const MAX_BODY_BYTES = 64 * 1024
 
@@ -63,6 +64,39 @@ async function handle(req: IncomingMessage, res: ServerResponse, config: Config,
 
   if (!authorised(req, config)) {
     send(res, 401, { error: "unauthorized" })
+    return
+  }
+
+  // Both transports route into the same handler; this one only unwraps a
+  // JSON-RPC envelope on the way in and wraps the answer on the way out.
+  if (path === "/mcp" && req.method === "POST") {
+    try {
+      const started = Date.now()
+      const payload = await readBody(req)
+      const reply = await handleMcp(browser, payload)
+
+      console.log(
+        JSON.stringify({
+          at: new Date().toISOString(),
+          transport: "mcp",
+          method: (payload as { method?: unknown })?.method ?? null,
+          ms: Date.now() - started,
+        }),
+      )
+
+      if (reply.body === null) {
+        res.writeHead(reply.status)
+        res.end()
+        return
+      }
+      send(res, reply.status, reply.body)
+    } catch (error) {
+      if (error instanceof ToolError) {
+        send(res, error.httpStatus, { error: error.message })
+        return
+      }
+      throw error
+    }
     return
   }
 

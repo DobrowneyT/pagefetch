@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { fetchPage } from "./client.js"
+import { fetchPage, tag } from "./client.js"
 
 const FIXTURE = "http://fixture:3000"
 const FIXTURE_ADMIN = process.env.FIXTURE_ADMIN_URL ?? "http://127.0.0.1:3100"
@@ -23,7 +23,7 @@ async function resetCounts(): Promise<void> {
  */
 
 test("a second fetch inside the TTL is served from cache with zero network traffic", async () => {
-  const url = `${FIXTURE}/plain?cache-silence`
+  const url = `${FIXTURE}/plain?cache-silence-${tag}`
 
   const first = await fetchPage({ url })
   assert.equal(first.code, "ok", `expected ok, got ${first.code}: ${first.detail}`)
@@ -37,11 +37,11 @@ test("a second fetch inside the TTL is served from cache with zero network traff
   assert.equal(second.content, first.content)
 
   const seen = await counts()
-  assert.equal(seen["fixture /plain?cache-silence"], undefined, "a cache hit hit the network — that is not a cache hit")
+  assert.equal(seen[`fixture /plain?cache-silence-${tag}`], undefined, "a cache hit hit the network — that is not a cache hit")
 })
 
 test("a hit reports when the page was actually fetched, not when it was read", async () => {
-  const url = `${FIXTURE}/plain?cache-time`
+  const url = `${FIXTURE}/plain?cache-time-${tag}`
 
   const first = await fetchPage({ url })
   await new Promise((resolve) => setTimeout(resolve, 1100))
@@ -52,7 +52,7 @@ test("a hit reports when the page was actually fetched, not when it was read", a
 })
 
 test("max_age 0 forces a refresh and the origin sees it", async () => {
-  const url = `${FIXTURE}/plain?cache-force`
+  const url = `${FIXTURE}/plain?cache-force-${tag}`
 
   await fetchPage({ url })
   await resetCounts()
@@ -62,11 +62,11 @@ test("max_age 0 forces a refresh and the origin sees it", async () => {
   assert.equal(forced.from_cache, false, "max_age 0 must bypass the cache")
 
   const seen = await counts()
-  assert.equal(seen["fixture /plain?cache-force"], 1, "the origin should have been asked exactly once")
+  assert.equal(seen[`fixture /plain?cache-force-${tag}`], 1, "the origin should have been asked exactly once")
 })
 
 test("an entry older than the requested max_age is refetched", async () => {
-  const url = `${FIXTURE}/plain?cache-age`
+  const url = `${FIXTURE}/plain?cache-age-${tag}`
 
   await fetchPage({ url })
   await new Promise((resolve) => setTimeout(resolve, 2100))
@@ -83,7 +83,7 @@ test("an entry older than the requested max_age is refetched", async () => {
 test("asking for a different format does not refetch", async () => {
   // html and text are both captured on every fetch and markdown is derived from
   // the html, so a change of format costs the origin nothing.
-  const url = `${FIXTURE}/plain?cache-formats`
+  const url = `${FIXTURE}/plain?cache-formats-${tag}`
 
   const asHtml = await fetchPage({ url, format: "html" })
   assert.equal(asHtml.from_cache, false)
@@ -99,7 +99,7 @@ test("asking for a different format does not refetch", async () => {
   assert.match(asMarkdown.content ?? "", /^#+ Plain page/m)
 
   const seen = await counts()
-  assert.equal(seen["fixture /plain?cache-formats"], undefined, "changing format caused a refetch")
+  assert.equal(seen[`fixture /plain?cache-formats-${tag}`], undefined, "changing format caused a refetch")
 })
 
 test("two URLs that redirect to the same place share one entry", async () => {
@@ -116,7 +116,7 @@ test("two URLs that redirect to the same place share one entry", async () => {
 })
 
 test("a cached page that satisfies wait_for is still a hit, and still silent", async () => {
-  const url = `${FIXTURE}/csr?cache-waitfor`
+  const url = `${FIXTURE}/csr?cache-waitfor-${tag}`
 
   const first = await fetchPage({ url, wait_for: ".award-card" })
   assert.equal(first.code, "ok", `expected ok, got ${first.code}: ${first.detail}`)
@@ -128,13 +128,13 @@ test("a cached page that satisfies wait_for is still a hit, and still silent", a
 
   // Verifying the selector must not reload the page's subresources.
   const seen = await counts()
-  assert.equal(seen["fixture /csr?cache-waitfor"], undefined, "verifying wait_for made a request")
+  assert.equal(seen[`fixture /csr?cache-waitfor-${tag}`], undefined, "verifying wait_for made a request")
 })
 
 test("a cached page that does NOT satisfy wait_for is refetched, not served", async () => {
   // Otherwise a caller who asked to wait for award cards could be handed a
   // stored page that never had any, with no way to tell.
-  const url = `${FIXTURE}/csr?cache-waitfor-miss`
+  const url = `${FIXTURE}/csr?cache-waitfor-miss-${tag}`
 
   await fetchPage({ url, wait_for: ".award-card" })
   const outcome = await fetchPage({ url, wait_for: ".never-appears" })
