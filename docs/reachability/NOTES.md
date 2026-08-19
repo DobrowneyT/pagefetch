@@ -148,3 +148,40 @@ browser changes that; it would need a logged-in session.
 
 Torn publishes an official API at `api.torn.com`, which is the sanctioned route
 and does not require pretending a scraper is a person.
+
+## Torn, corrected — it was the fragment, not the login
+
+The earlier reading was wrong. `torn.com/forums.php` returned 77 characters and
+I called it a logged-out shell needing authentication. It is a shell, but not
+because of authentication — **because the bare URL carries no route**.
+
+Torn's forums are a hash-routed app. Everything meaningful is after the `#`:
+
+```
+https://www.torn.com/forums.php#/p=threads&f=46&t=15907925&b=0&a=0&start=85920&to=26282214
+```
+
+With the fragment, logged out, we get 7,510 characters of real content: the
+board (`Company Recruitment`), the thread title, and every post with author,
+player ID, level, post count, karma, last action and timestamp.
+
+The pagination confirms the deep link was honoured rather than merely landing on
+the thread — `start=85920` is page 4297 of 5303, and that is the page returned.
+
+### The pattern worth reusing
+
+The fragment never reaches the server, so the app mounts empty and fills in
+afterwards. Capturing at `domcontentloaded` gets the shell every time. The fix is
+a `wait_for` on the mount point gaining a **child**, not on the mount point
+itself — the container is already in the shell:
+
+```json
+{ "url": "…forums.php#/p=threads&t=15907925", "wait_for": "#forums-page-wrap > *" }
+```
+
+`<mount> > *` generalises to any hash-routed SPA where the container ships in the
+initial HTML. This is the failure mode `CONTEXT.md` calls a **fragment route**,
+and the one the PRD says no HTTP client can ever reach — demonstrated end to end
+against a real site.
+
+Robots still permits it: `forums.php` is not among Torn's 347 disallow rules.
