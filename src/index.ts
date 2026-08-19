@@ -21,6 +21,16 @@ if (config.robotsOverride.size > 0) {
   )
 }
 
+if (config.cdpUrl) {
+  console.warn(
+    `[pagefetch] ATTACHED to an existing browser at ${config.cdpUrl}.\n` +
+      "  Fetches run in that browser, with its profile, its cookies and its IP.\n" +
+      "  The validating egress proxy is NOT in the path — we cannot pass flags to a\n" +
+      "  browser we did not launch — so redirect hops are guarded on the page instead,\n" +
+      "  which does not catch a same-document redirect. See docs/BYOB.md.",
+  )
+}
+
 if (!config.headless) {
   console.warn(
     "[pagefetch] Running HEADFUL under a virtual display. This is a stock browser, " +

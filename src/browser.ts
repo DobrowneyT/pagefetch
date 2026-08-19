@@ -17,7 +17,7 @@ import { extract, render, type Format } from "./extract.js"
 import { Limiter } from "./limiter.js"
 import { Robots } from "./robots.js"
 import { Store } from "./store.js"
-import { validateUrl } from "./url-validation.js"
+import { validateUrl, validateUrlSyntax } from "./url-validation.js"
 
 export interface FetchRequest {
   url: string
@@ -103,6 +103,26 @@ export class Browser {
     if (this.browser) return this.browser
     if (this.starting) return this.starting
 
+    // Bring-your-own-browser: attach to one that is already running rather than
+    // launching our own. We cannot pass it flags, so the egress proxy is not in
+    // the path — index.ts says so loudly at startup.
+    if (this.config.cdpUrl) {
+      this.starting = chromium
+        .connectOverCDP(this.config.cdpUrl)
+        .then((browser) => {
+          browser.on("disconnected", () => {
+            this.browser = null
+            this.contexts.clear()
+          })
+          this.browser = browser
+          return browser
+        })
+        .finally(() => {
+          this.starting = null
+        })
+      return this.starting
+    }
+
     this.starting = this.proxy
       .listen()
       .then(() =>
@@ -153,6 +173,16 @@ export class Browser {
    * No stealth plugins, no fingerprint patching, no UA string games. Stock.
    */
   private async contextFor(host: string): Promise<BrowserContext> {
+    // Attached to someone else's browser: use the context it already has. A
+    // `newContext()` here would be a blank incognito profile with none of the
+    // cookies or history that are the entire reason for connecting, so
+    // per-domain jars are given up deliberately — it is one browser, one jar,
+    // and it is the user's.
+    if (this.config.cdpUrl) {
+      const browser = await this.ensureBrowser()
+      return browser.contexts()[0] ?? (await browser.newContext())
+    }
+
     const existing = this.contexts.get(host)
     if (existing) {
       // Refresh LRU position.
@@ -190,6 +220,9 @@ export class Browser {
 
   /** Cookies are only persistent if they are written down. */
   private async saveState(host: string, context: BrowserContext): Promise<void> {
+    // Their browser manages its own profile on disk. Writing our copy would be
+    // both pointless and presumptuous.
+    if (this.config.cdpUrl) return
     try {
       await mkdir(this.config.profileDir, { recursive: true })
       await context.storageState({ path: join(this.config.profileDir, stateFileName(host)) })
@@ -217,17 +250,25 @@ export class Browser {
   }
 
   async close(): Promise<void> {
-    for (const host of [...this.contexts.keys()]) await this.retireContext(host)
     const browser = this.browser
     this.browser = null
-    if (browser) await browser.close().catch(() => {})
+
+    if (this.config.cdpUrl) {
+      // Disconnect, do not close. Shutting down a browser the user is sitting
+      // in front of would be a rude way to stop a background service.
+      if (browser) await browser.close().catch(() => {})
+    } else {
+      for (const host of [...this.contexts.keys()]) await this.retireContext(host)
+      if (browser) await browser.close().catch(() => {})
+    }
+
     await this.proxy.close()
     this.store.close()
   }
 
   /** The proxy address appears in the browser's command line and nowhere else. */
   private async browserRssBytes(): Promise<number> {
-    if (!this.browser) return 0
+    if (!this.browser || this.config.cdpUrl) return 0
     return browserTreeRssBytes(`--proxy-server=${this.proxy.address}`)
   }
 
@@ -239,6 +280,8 @@ export class Browser {
    * are written down, before anything is closed.
    */
   private async restartIfBloated(): Promise<void> {
+    // Not ours to restart, and not ours to have an opinion about.
+    if (this.config.cdpUrl) return
     if (this.restarting || !this.browser) return
 
     const bytes = await this.browserRssBytes()
@@ -421,6 +464,9 @@ export class Browser {
     const page = await context.newPage()
     const startedAt = Date.now()
 
+    /** Hops this page's guard refused. Only used in attached mode. */
+    const blockedHops: string[] = []
+
     /**
      * The most recent main-frame document response.
      *
@@ -442,6 +488,13 @@ export class Browser {
      * another fetch is refused elsewhere gets reported as `invalid_url` — the
      * wrong code, and a confusing one.
      */
+    // Attached mode has no egress proxy, so validation moves onto the page.
+    // This catches the submitted URL and every subresource; it does NOT catch a
+    // same-document redirect hop, because Chromium follows those internally and
+    // never re-enters routing. That gap is why the proxy exists, and why
+    // docs/BYOB.md tells you how to put it back if you want it.
+    if (this.config.cdpUrl) await this.installPageGuard(page, blockedHops)
+
     const requestedHosts = new Set<string>()
     page.on("request", (request) => {
       try {
@@ -462,6 +515,9 @@ export class Browser {
         // An HTTPS hop the proxy refused fails the navigation outright, because
         // a rejected CONNECT is not a response the browser can render. Only
         // refusals of hosts THIS page asked for count — see requestedHosts.
+        if (blockedHops.length > 0) {
+          return result("invalid_url", { detail: `blocked at the hop: ${blockedHops.join("; ")}` })
+        }
         const refused = this.proxy
           .rejectionsSince(startedAt)
           .filter((rejection) => requestedHosts.has(rejection.host.toLowerCase()))
@@ -475,6 +531,10 @@ export class Browser {
         // render budget was never the problem, and calling it one poisons the
         // reachability data by making a dead host look like a slow one.
         return result("origin_error", { detail: `navigation failed: ${(error as Error).message}` })
+      }
+
+      if (blockedHops.length > 0) {
+        return result("invalid_url", { detail: `blocked at the hop: ${blockedHops.join("; ")}` })
       }
 
       // A plain-HTTP hop the proxy refused comes back as a renderable 403, which
@@ -575,6 +635,29 @@ export class Browser {
     } finally {
       await page.close().catch(() => {})
     }
+  }
+
+  /**
+   * URL validation for a browser we did not launch.
+   *
+   * A weaker guarantee than the proxy — see the note at the call site — but a
+   * great deal better than nothing, and it costs the page nothing when every
+   * request is legitimate.
+   */
+  private async installPageGuard(page: Page, blockedHops: string[]): Promise<void> {
+    await page.route("**/*", async (route) => {
+      const target = route.request().url()
+      const verdict = route.request().isNavigationRequest()
+        ? await validateUrl(target, this.config.allowHosts)
+        : validateUrlSyntax(target, this.config.allowHosts)
+
+      if (!verdict.ok) {
+        blockedHops.push(verdict.reason)
+        await route.abort("blockedbyclient").catch(() => {})
+        return
+      }
+      await route.continue().catch(() => {})
+    })
   }
 
   /** The interstitial's fingerprint, or null if this does not look like one. */

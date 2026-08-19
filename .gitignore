@@ -16,3 +16,6 @@ cache/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local attached-browser run: token, profile, cache
+.local/

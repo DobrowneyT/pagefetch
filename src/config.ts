@@ -23,6 +23,20 @@ export interface Config {
    * any spoofing on our part, so "a stock browser" deserved a fair test.
    */
   headless: boolean
+  /**
+   * Connect to a browser that is already running, instead of launching one.
+   *
+   * This is the "bring your own browser" mode: point it at a Chrome/Brave
+   * started with `--remote-debugging-port`, and fetches happen in that real
+   * browser, on that machine, with that profile and that IP. Nothing is
+   * disguised — it genuinely is a real browser, which is the whole point.
+   *
+   * It costs a security property, and the server says so at startup: we cannot
+   * pass `--proxy-server` to a browser we did not launch, so the validating
+   * egress proxy is not in the path unless you point the browser at it yourself.
+   * See `docs/BYOB.md`.
+   */
+  cdpUrl: string | null
   /** Restart the browser once its process tree exceeds this. Chromium leaks over days. */
   memoryRestartMb: number
   /** How many per-domain contexts to keep open before evicting the least recently used. */
@@ -104,6 +118,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     benchMinutes: number(env, "PAGEFETCH_BENCH_MINUTES", 60),
     blocksBeforeDisable: number(env, "PAGEFETCH_BLOCKS_BEFORE_DISABLE", 3),
     headless: env.PAGEFETCH_HEADLESS !== "false",
+    cdpUrl: env.PAGEFETCH_CDP_URL ?? null,
     memoryRestartMb: number(env, "PAGEFETCH_MEMORY_RESTART_MB", 1200),
     maxContexts: number(env, "PAGEFETCH_MAX_CONTEXTS", 20),
     cachePath: env.PAGEFETCH_CACHE_PATH ?? "/data/pagefetch.db",

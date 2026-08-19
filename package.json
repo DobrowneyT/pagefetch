@@ -14,7 +14,8 @@
     "test": "npm run build && node --test dist/test/unit/*.test.js",
     "test:container": "./scripts/test-container.sh",
     "test:live": "npm run build && PAGEFETCH_LIVE=1 node --test dist/test/live/*.test.js",
-    "reachability": "node scripts/reachability.mjs"
+    "reachability": "node scripts/reachability.mjs",
+    "start:local": "node dist/src/index.js"
   },
   "dependencies": {
     "playwright": "1.62.1",
