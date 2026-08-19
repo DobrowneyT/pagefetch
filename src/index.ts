@@ -21,6 +21,14 @@ if (config.robotsOverride.size > 0) {
   )
 }
 
+if (!config.headless) {
+  console.warn(
+    "[pagefetch] Running HEADFUL under a virtual display. This is a stock browser, " +
+      "not a disguised one — no fingerprint patching, no stealth plugins, no UA games. " +
+      "It uses more memory than headless.",
+  )
+}
+
 server.listen(config.port, config.bind, () => {
   console.log(`[pagefetch] listening on ${config.bind}:${config.port}`)
 })

@@ -107,7 +107,7 @@ export class Browser {
       .listen()
       .then(() =>
         chromium.launch({
-          headless: true,
+          headless: this.config.headless,
           args: [
             // Chromium's default /dev/shm is 64MB inside Docker and it will
             // crash on a large page. compose.yml also sets shm_size.
