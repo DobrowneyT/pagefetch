@@ -10,11 +10,10 @@ machine once access is granted.
 > boundary proven by test against the real VPS. Every behavioural test runs
 > against `/fetch` and `/mcp` alike.
 >
-> **What it does not do is measured, not assumed:** the Cloudflare-protected
-> aggregator that prompted this build refuses a stock browser, so the honest
-> return is zero of the five aggregators — see issue #10 and the table below.
-> What it does deliver is client-side-rendered pages, fragment routes, and the
-> end of the wasted-discovery loop.
+> **What it reaches is measured, not assumed.** Attached to a real browser
+> (`docs/BYOB.md`), two of the five scholarship aggregators fetch, three are
+> refused by `robots.txt`, and three of five job boards return real listings.
+> `docs/reachability/` holds the results and the reasoning.
 
 ## What it solves
 
@@ -38,11 +37,14 @@ answer for every agent across every repo.
 
 ## What it does not solve
 
-**Most sites that block us do so by `robots.txt` policy, not bot detection, and
-this service will not unlock them** — it respects robots by default. Measured
-against the aggregators that prompted this work, exactly one of five is a
-candidate. The full table is in the PRD's problem statement, and anyone judging
-whether this build succeeded should read it first.
+**Sites that refuse by `robots.txt` stay refused** — it respects robots by
+default, and that is an answer rather than an obstacle. Three of the five
+scholarship aggregators and LinkedIn's job search fall in that category.
+
+Measured results and the reasoning behind them live in
+[`docs/reachability/`](docs/reachability/). Read those before judging what this
+build did or did not deliver — several earlier verdicts turned out to be wrong,
+in both directions.
 
 ## Documentation
 

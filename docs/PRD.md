@@ -27,6 +27,13 @@ The second problem is that the failure is currently silent and unstructured. A 4
 > produced them, are in [`docs/reachability/RESULTS.md`](reachability/RESULTS.md)
 > and issue #10. The table is left as written, because a prediction is more
 > useful next to its outcome than quietly corrected.
+>
+> **Superseded 2026-08-19: two of five, not zero.** Attached to a real browser
+> (`docs/BYOB.md`), `scholarshipscanada.com` and `findaphd.com` both fetch. The
+> challenge was hiding their `robots.txt`, and neither disallows us — the first
+> has no `User-agent: *` group at all, the second says `Allow: /`. The row below
+> for `findaphd.com` claims a robots `Disallow: /` that does not exist. The other
+> three are refused by stated policy and stay refused.
 
 | Site | Predicted | Measured 2026-08-17 |
 |---|---|---|

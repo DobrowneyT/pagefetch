@@ -185,3 +185,31 @@ and the one the PRD says no HTTP client can ever reach — demonstrated end to e
 against a real site.
 
 Robots still permits it: `forums.php` is not among Torn's 347 disallow rules.
+
+## Why the attached browser worked — the mechanism, measured
+
+Not a guess. Same probe (`navigator` properties on `about:blank`) in all three
+modes:
+
+| Mode | `navigator.webdriver` | `plugins` | `languages` |
+|---|---|---|---|
+| Attached Brave, launched normally | **`false`** | 5 | `en-GB,en-US,en` |
+| Playwright-launched, headless | **`true`** | 0 | `en-US` |
+| Playwright-launched, headful | **`true`** | 5 | `en-US,en` |
+
+Going headful fixed the plugin count and the language list. It did **not** fix
+`navigator.webdriver`, which is exactly why the headful run on a residential IP
+with a 45-second budget still failed. That one flag is the difference.
+
+`navigator.webdriver` is `true` because Playwright launches the browser in
+automation mode. Attach to a browser launched *normally* and the flag was never
+set in the first place.
+
+**This is the whole distinction, and it is worth being precise about.** We did
+not patch `navigator.webdriver`, hook it, or lie about it. A stealth plugin makes
+an automated browser claim it is not automated. We simply did not automate the
+launch — the browser is telling the truth, and the truth happens to be acceptable
+to the site. That is why this mode is in scope and a stealth plugin is not.
+
+It also explains the earlier results without any appeal to luck: every mode that
+failed had `webdriver: true`, and the one that succeeded had `webdriver: false`.

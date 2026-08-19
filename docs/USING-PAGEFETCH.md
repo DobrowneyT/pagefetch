@@ -158,6 +158,27 @@ complete until the selector exists", so a cached page that does not contain the
 selector is not served — it is refetched. You cannot be handed a stored page
 that never had what you asked for. Verifying this costs no network traffic.
 
+#### Fragment routes need a `wait_for`, and probably not the one you think
+
+For a hash-routed page — `example.com/app.php#/thread/123` — the fragment never
+reaches the server, so the app mounts **empty** and fills in afterwards. Without a
+`wait_for` you will reliably capture the shell.
+
+Waiting on the mount point does not help either: it ships in the initial HTML, so
+it already exists. Wait for it to gain a **child**:
+
+```json
+{
+  "url": "https://www.torn.com/forums.php#/p=threads&f=46&t=15907925",
+  "wait_for": "#forums-page-wrap > *"
+}
+```
+
+`<mount> > *` generalises to any SPA of this shape. Without it that URL returns 77
+characters; with it, the full thread. Find the mount point by fetching once
+without `wait_for` and looking at the shell's element ids — that first fetch is
+cached, so inspecting it costs nothing.
+
 **`fetched_at` on a cache hit is when the page was fetched, not when you read
 it.** That is the point of the field: it tells you whether you are reading
 something captured now or six days ago.
