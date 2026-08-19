@@ -1,6 +1,6 @@
 import type { Browser } from "./browser.js"
 import type { ToolResult } from "./codes.js"
-import { isFormat, type Format } from "./extract.js"
+import { FORMATS, isFormat, type Format } from "./extract.js"
 
 /**
  * The one handler. Both `/fetch` and `/mcp` route into this, so the two
@@ -46,7 +46,7 @@ function parseFetchPageArgs(raw: unknown): FetchPageArgs {
   if (typeof args.url !== "string" || args.url === "") throw new ToolError(400, "arguments.url is required")
 
   const format = args.format ?? "markdown"
-  if (!isFormat(format)) throw new ToolError(400, `format must be markdown, text, or html; got ${String(args.format)}`)
+  if (!isFormat(format)) throw new ToolError(400, `format must be one of ${FORMATS.join(", ")}; got ${String(args.format)}`)
 
   if (args.wait_for !== undefined && typeof args.wait_for !== "string") {
     throw new ToolError(400, "wait_for must be a CSS selector string")

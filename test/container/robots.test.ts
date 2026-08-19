@@ -106,3 +106,33 @@ test("no request parameter can override robots", async () => {
     assert.equal(outcome.code, "blocked_robots", `a caller relaxed policy with ${JSON.stringify(extra)}`)
   }
 })
+
+test("a trailing-slash Disallow covers the bare path", async () => {
+  // careers.arm.com writes `Disallow: /search-jobs/`. Under strict RFC 9309
+  // prefix matching the bare `/search-jobs` is permitted, which is the letter of
+  // what they wrote and plainly not what they meant. Being technically allowed
+  // is not the same as being welcome.
+  const outcome = await fetchPage({ url: "http://trailingslash-fixture:3000/search-jobs" })
+
+  assert.equal(outcome.code, "blocked_robots", `expected blocked_robots, got ${outcome.code}: ${outcome.detail}`)
+  assert.equal(outcome.content, null)
+})
+
+test("the trailing-slash rule does not over-block a longer sibling path", async () => {
+  // The risk of the deviation. `/search-jobs-archive` shares a prefix with
+  // `/search-jobs` but is a different place, and must stay fetchable.
+  const outcome = await fetchPage({ url: "http://trailingslash-fixture:3000/search-jobs-archive" })
+
+  assert.equal(outcome.code, "ok", `expected ok, got ${outcome.code}: ${outcome.detail}`)
+  assert.match(outcome.content ?? "", /Archive/)
+})
+
+test("an explicit Allow on the bare path still wins", async () => {
+  // `Disallow: /docs/` with `Allow: /docs` is a site saying the index is fine
+  // and the tree is not. The directory-form match ties rather than beating it.
+  const index = await fetchPage({ url: "http://trailingslash-fixture:3000/docs" })
+  assert.equal(index.code, "ok", `expected ok, got ${index.code}: ${index.detail}`)
+
+  const inside = await fetchPage({ url: "http://trailingslash-fixture:3000/docs/internal" })
+  assert.equal(inside.code, "blocked_robots", `expected blocked_robots, got ${inside.code}: ${inside.detail}`)
+})

@@ -22,6 +22,11 @@
  * derived from the stored HTML in Node. Storing those two means **a change of
  * format is not a refetch**, which is the point — asking for the same page as
  * markdown after fetching it as HTML should cost the origin nothing.
+ *
+ * `raw` is stored alongside rather than fetched fresh, for that same reason: a
+ * sitemap is a page like any other and re-reading it should cost the origin
+ * nothing. It is nullable because it is only captured when it was asked for, and
+ * a row that has it keeps it — see the COALESCE in `storePage`.
  */
 import { DatabaseSync } from "node:sqlite"
 import type { Config } from "./config.js"
@@ -33,6 +38,8 @@ export interface CachedPage {
   status: number | null
   html: string
   text: string
+  /** The response body as the origin sent it. Null unless a `raw` fetch stored one. */
+  raw: string | null
   /** When the origin was actually read. On a hit this is what the caller is told. */
   fetchedAt: string
   fetchedAtMs: number
@@ -50,6 +57,10 @@ CREATE TABLE IF NOT EXISTS pages (
   status        INTEGER,
   html          TEXT NOT NULL,
   text          TEXT NOT NULL,
+  -- Nullable, and added by migration rather than only here: an existing
+  -- database predates this column and CREATE TABLE IF NOT EXISTS will not
+  -- add it. See migrate() below.
+  raw           TEXT,
   fetched_at    TEXT NOT NULL,
   fetched_at_ms INTEGER NOT NULL
 );
@@ -105,6 +116,20 @@ export class Store {
     // ungraceful container stop.
     this.db.exec("PRAGMA journal_mode = WAL;")
     this.db.exec(SCHEMA)
+    this.migrate()
+  }
+
+  /**
+   * Columns added after the first release.
+   *
+   * The cache is the primary feature, so a schema change must not throw it away.
+   * `ALTER TABLE ADD COLUMN` on a nullable column keeps every cached page.
+   */
+  private migrate(): void {
+    const columns = this.db.prepare("PRAGMA table_info(pages)").all() as { name: string }[]
+    if (!columns.some((column) => column.name === "raw")) {
+      this.db.exec("ALTER TABLE pages ADD COLUMN raw TEXT")
+    }
   }
 
   /**
@@ -126,6 +151,7 @@ export class Store {
           status: number | null
           html: string
           text: string
+          raw: string | null
           fetched_at: string
           fetched_at_ms: number
         }
@@ -139,6 +165,7 @@ export class Store {
       status: row.status,
       html: row.html,
       text: row.text,
+      raw: row.raw,
       fetchedAt: row.fetched_at,
       fetchedAtMs: row.fetched_at_ms,
     }
@@ -147,13 +174,19 @@ export class Store {
   storePage(requested: string, page: CachedPage): void {
     this.db
       .prepare(
-        `INSERT INTO pages (url_final, status, html, text, fetched_at, fetched_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?)
+        // A fetch that captured only one side must not erase the other. A `raw`
+        // fetch of an XML document has no DOM, and a markdown fetch has no raw
+        // body; either overwriting the other would turn a hit into a refetch.
+        `INSERT INTO pages (url_final, status, html, text, raw, fetched_at, fetched_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(url_final) DO UPDATE SET
-           status = excluded.status, html = excluded.html, text = excluded.text,
+           status = excluded.status,
+           html = CASE WHEN excluded.html = '' THEN pages.html ELSE excluded.html END,
+           text = CASE WHEN excluded.text = '' THEN pages.text ELSE excluded.text END,
+           raw  = COALESCE(excluded.raw, pages.raw),
            fetched_at = excluded.fetched_at, fetched_at_ms = excluded.fetched_at_ms`,
       )
-      .run(page.urlFinal, page.status, page.html, page.text, page.fetchedAt, page.fetchedAtMs)
+      .run(page.urlFinal, page.status, page.html, page.text, page.raw, page.fetchedAt, page.fetchedAtMs)
 
     this.db
       .prepare(

@@ -85,20 +85,32 @@ and `POST /fetch` (plain JSON, for zero-dependency CLIs).
 
 ## Non-negotiables
 
-These are design constraints, not preferences. They keep the VPS IP in good
-standing, which is the real operational risk — the address is shared with
-unrelated services.
+The line is **capability, not deception**: improving what this genuinely is stays
+in scope, and misrepresenting what it is never does.
 
 - ❌ No CAPTCHA solving, ever.
-- ❌ No fingerprint spoofing or stealth plugins. A stock browser with a
-  persistent profile, or nothing.
-- ❌ No authenticated scraping. No stored site logins.
-- ❌ No continuous crawling. A few hundred pages a week is the design point.
-- ❌ No general browser automation. Four read-only tools.
+- ❌ No fingerprint spoofing or stealth plugins, and **never a patched
+  `navigator.webdriver`**. A browser launched by automation that claims it was
+  not is lying — that is the whole prohibition.
+- ❌ No continuous crawling. A few hundred pages a week is the design point, and
+  the politeness caps are server-side so no caller can exceed them.
 - ❌ Never behind the public reverse proxy. Loopback plus tunnel.
-- ❌ Not a way around a site that has decided it does not want automated access.
-  **If a site blocks a stock browser with a persistent profile, the answer is to
-  stop.**
+- ❌ `robots.txt` is not negotiable at call time. The override is a per-domain
+  config entry, and a `blocked_robots` is an answer rather than an obstacle.
+
+✅ In scope, because none of it misrepresents anything: running headful,
+**attaching to a browser you launched yourself** rather than launching one,
+keeping a real cookie jar, and giving a managed challenge time to clear.
+
+Attaching leaves `navigator.webdriver` reading `false` **because it was never
+set** — categorically different from setting it back. That distinction is
+measured rather than asserted; see [`docs/reachability/NOTES.md`](docs/reachability/NOTES.md).
+
+Two design constraints are about surface area rather than principle, and can be
+revisited with a reason: **four read-only tools, no click or type** (each is
+attack surface and a rate-limiting problem), and **no stored site logins**
+(attached mode inherits whatever session your own browser already has, which is
+a different thing from this service holding credentials).
 
 ## Security
 

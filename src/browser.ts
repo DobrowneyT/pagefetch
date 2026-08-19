@@ -6,6 +6,7 @@ import {
   errors as playwrightErrors,
   type Browser as PlaywrightBrowser,
   type BrowserContext,
+  type Download,
   type Page,
   type Response,
 } from "playwright"
@@ -13,7 +14,7 @@ import type { Config } from "./config.js"
 import { browserTreeRssBytes, stateFileName } from "./lifecycle.js"
 import { result, type BatchResult, type FetchResult, type ReachableResult } from "./codes.js"
 import { EgressProxy, REJECTED_HEADER } from "./egress-proxy.js"
-import { extract, render, type Format } from "./extract.js"
+import { extract, render, satisfies, type Format } from "./extract.js"
 import { Limiter } from "./limiter.js"
 import { Robots } from "./robots.js"
 import { Store } from "./store.js"
@@ -28,6 +29,16 @@ export interface FetchRequest {
 }
 
 const CHALLENGE_POLL_MS = 500
+
+/**
+ * The ceiling on a `raw` body. Generous enough for a large sitemap — the one on
+ * `scholarshipscanada.com` is 6.8MB — and low enough that an unbounded download
+ * cannot exhaust the process.
+ */
+const MAX_RAW_BYTES = 32 * 1024 * 1024
+
+/** How long to wait for the download event that follows a download-aborted navigation. */
+const DOWNLOAD_EVENT_TIMEOUT_MS = 5_000
 
 /** Markers a Cloudflare-style interstitial leaves behind even on a 200. */
 const CHALLENGE_MARKERS = [
@@ -92,8 +103,14 @@ export class Browser {
     // robots would require checking robots. It is not page-cached — its policy
     // lives in its own table with its own TTL — but it DOES go through the
     // limiter, because it is a real request to the origin like any other.
+    //
+    // `format: "raw"` because robots.txt is a text file, not a document. Read
+    // through the DOM it depends on Chromium choosing to render the origin's
+    // content-type, and an origin that serves it as a download would produce an
+    // empty policy — which parses as "no restrictions" and would quietly hand us
+    // a site we were never given permission to crawl.
     this.robots = new Robots(config, this.store, (url) =>
-      this.fetchThroughLimiter({ url, format: "text" }, false),
+      this.fetchThroughLimiter({ url, format: "raw" }, false),
     )
   }
 
@@ -325,13 +342,20 @@ export class Browser {
     // That has to hold for a cached answer as well, or a caller who asked to
     // wait for award cards could be handed a stored page that never had any and
     // have no way to tell. Verified without touching the network.
-    if (hit && (!request.waitFor || (await this.cachedContentSatisfies(hit.html, request.waitFor)))) {
+    if (
+      hit &&
+      // A row cached as markdown cannot answer `raw`, and vice versa — the two
+      // live in different columns and serving the wrong one returns an empty
+      // string dressed as a hit.
+      satisfies(hit, request.format) &&
+      (!request.waitFor || (await this.cachedContentSatisfies(hit.html, request.waitFor)))
+    ) {
       return result("ok", {
         status: hit.status,
         url_final: hit.urlFinal,
         fetched_at: hit.fetchedAt,
         from_cache: true,
-        content: render({ html: hit.html, text: hit.text }, request.format),
+        content: render({ html: hit.html, text: hit.text, raw: hit.raw }, request.format),
       })
     }
 
@@ -424,13 +448,16 @@ export class Browser {
   cacheLookup(url: string, format: Format, maxAge: number | undefined): FetchResult {
     const cached = this.store.lookupPage(url, maxAge ?? this.config.cacheTtlSeconds)
     if (!cached) return result("ok", { detail: "not cached" })
+    // Cached, but not in the form asked for. A miss for this format is still a
+    // clean miss; claiming a hit and returning "" would be the worse answer.
+    if (!satisfies(cached, format)) return result("ok", { detail: `not cached as ${format}` })
 
     return result("ok", {
       status: cached.status,
       url_final: cached.urlFinal,
       fetched_at: cached.fetchedAt,
       from_cache: true,
-      content: render({ html: cached.html, text: cached.text }, format),
+      content: render({ html: cached.html, text: cached.text, raw: cached.raw }, format),
     })
   }
 
@@ -495,6 +522,18 @@ export class Browser {
     // docs/BYOB.md tells you how to put it back if you want it.
     if (this.config.cdpUrl) await this.installPageGuard(page, blockedHops)
 
+    /**
+     * A download the origin started instead of serving a document.
+     *
+     * Chromium aborts the navigation for these, so `page.goto()` throws and
+     * there is no DOM and no readable response body — the bytes exist only as a
+     * download. For `format: "raw"` those bytes are exactly what was asked for.
+     */
+    let pendingDownload: Download | null = null
+    page.on("download", (download) => {
+      pendingDownload = download
+    })
+
     const requestedHosts = new Set<string>()
     page.on("request", (request) => {
       try {
@@ -515,6 +554,9 @@ export class Browser {
         // An HTTPS hop the proxy refused fails the navigation outright, because
         // a rejected CONNECT is not a response the browser can render. Only
         // refusals of hosts THIS page asked for count — see requestedHosts.
+        //
+        // This stays ahead of the download check below: a refusal is a security
+        // verdict and must never be overtaken by a body that arrived anyway.
         if (blockedHops.length > 0) {
           return result("invalid_url", { detail: `blocked at the hop: ${blockedHops.join("; ")}` })
         }
@@ -523,6 +565,21 @@ export class Browser {
           .filter((rejection) => requestedHosts.has(rejection.host.toLowerCase()))
         if (refused.length > 0) {
           return result("invalid_url", { detail: `blocked at the hop: ${describe(refused)}` })
+        }
+
+        // A download is not a failed navigation. The origin answered; Chromium
+        // simply declined to make a page out of what it sent.
+        //
+        // `page.goto()` rejects the moment Chromium decides it is a download,
+        // which is usually BEFORE the download event is dispatched — so the
+        // handler above has often not run yet and we have to wait for it.
+        const download =
+          pendingDownload ??
+          (isDownloadError(error)
+            ? await page.waitForEvent("download", { timeout: DOWNLOAD_EVENT_TIMEOUT_MS }).catch(() => null)
+            : null)
+        if (download) {
+          return await this.completeDownload(request, cacheable, host, download, lastMainResponse)
         }
         if (error instanceof playwrightErrors.TimeoutError) {
           return result("timeout", { detail: `navigation exceeded ${this.config.navTimeoutMs}ms` })
@@ -574,8 +631,37 @@ export class Browser {
 
       const extracted = await extract(page)
 
-      const blocked = this.classifyBlock(status, extracted.html, settled)
+      // The body underneath the document. Read when it was asked for, and also
+      // when there is no document — that is the only way to tell "the origin
+      // sent nothing" from "the browser did not make a page out of what it sent",
+      // and those two deserve different answers.
+      const wantsRaw = request.format === "raw"
+      let raw = wantsRaw || extracted.html === "" ? await readBody(settled) : null
+
+      // Classified against whichever we have. An interstitial served for a URL
+      // Chromium would not render — a challenged robots.txt, say — still carries
+      // its markers in the bytes.
+      const blocked = this.classifyBlock(status, extracted.html || raw || "", settled)
       if (blocked) return result(blocked.code, { status, url_final: page.url(), detail: blocked.detail })
+
+      let content = render({ ...extracted, raw }, request.format)
+
+      // Nothing to show is never returned as `ok` without first finding out why.
+      // A consumer cannot tell a genuinely blank page from a fetch that quietly
+      // produced nothing, and that is the one failure they cannot detect.
+      //
+      // `text` is the trigger rather than `content`, because Chromium invents a
+      // `<html><head></head><body></body></html>` skeleton for a zero-byte
+      // response — so `format: "html"` of nothing at all looks non-empty.
+      if (content === "" || extracted.text === "") {
+        if (raw === null) raw = await readBody(settled)
+        content = render({ ...extracted, raw }, request.format)
+
+        const emptiness = describeEmptiness(status, extracted.html, raw, settled)
+        if (emptiness && !(wantsRaw && content !== "")) {
+          return result("origin_error", { status, url_final: page.url(), detail: emptiness })
+        }
+      }
 
       // The browser navigates redirects itself, so its own URL is the end of the
       // chain, fragment included.
@@ -595,19 +681,76 @@ export class Browser {
           status,
           html: extracted.html,
           text: extracted.text,
+          raw,
           fetchedAt,
           fetchedAtMs: Date.now(),
         })
       }
 
-      return result("ok", {
-        status,
-        url_final: urlFinal,
-        fetched_at: fetchedAt,
-        content: render(extracted, request.format),
-      })
+      return result("ok", { status, url_final: urlFinal, fetched_at: fetchedAt, content })
     } finally {
       await page.close().catch(() => {})
+    }
+  }
+
+  /**
+   * The origin sent a file rather than a page.
+   *
+   * Only `raw` can be answered from a download — there is no DOM to render into
+   * markdown, text or HTML, and returning an empty string for those is the
+   * silence-dressed-as-success this format exists to remove.
+   */
+  private async completeDownload(
+    request: FetchRequest,
+    cacheable: boolean,
+    host: string,
+    download: Download,
+    response: Response | null,
+  ): Promise<FetchResult> {
+    const status = response?.status() ?? null
+    this.limiter.recordOutcome(host, status)
+
+    const urlFinal = download.url()
+    try {
+      if (request.format !== "raw") {
+        return result("origin_error", {
+          status,
+          url_final: urlFinal,
+          detail:
+            `the origin served a download (${download.suggestedFilename()}) rather than a document; ` +
+            `request it with format: "raw"`,
+        })
+      }
+
+      const raw = await readDownload(download)
+      if (raw === null) {
+        return result("origin_error", {
+          status,
+          url_final: urlFinal,
+          detail: `the origin started a download that could not be read (${download.suggestedFilename()})`,
+        })
+      }
+
+      const fetchedAt = new Date().toISOString()
+      if (cacheable) {
+        // No DOM to store. `storePage` keeps whatever html and text the row
+        // already had rather than blanking them.
+        this.store.storePage(request.url, {
+          urlFinal,
+          status,
+          html: "",
+          text: "",
+          raw,
+          fetchedAt,
+          fetchedAtMs: Date.now(),
+        })
+      }
+
+      return result("ok", { status, url_final: urlFinal, fetched_at: fetchedAt, content: raw })
+    } finally {
+      // Do not leave files behind. In attached mode this is the user's own
+      // machine and their own Downloads folder — see docs/BYOB.md.
+      await download.delete().catch(() => {})
     }
   }
 
@@ -738,4 +881,84 @@ export class Browser {
 
 function describe(rejections: { host: string; reason: string }[]): string {
   return rejections.map((entry) => entry.reason).join("; ")
+}
+
+/**
+ * The response body as the origin sent it.
+ *
+ * Read off the response the browser already has, which matters more than it
+ * looks: `context.request.get()` would be a second request, from Node rather
+ * than from the browser, and on a challenged host it is refused — measured, on
+ * `scholarshipscanada.com`, where the browser gets 200 and the request API gets
+ * 403. Reading the body we already fetched costs the origin nothing extra and
+ * carries the browser's own connection, cookies and TLS by construction.
+ *
+ * Decoded as UTF-8. Every format this serves — XML, JSON, robots.txt — is UTF-8
+ * in practice, and a mis-decoded body is a visible problem rather than a silent
+ * one.
+ */
+/** Chromium aborts a navigation it decides is a download, and says so in the message. */
+function isDownloadError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("Download is starting")
+}
+
+/**
+ * Why there is nothing to return, or null if the emptiness is the page's own.
+ *
+ * Three different things look identical from the outside, and only one of them
+ * is a legitimate `ok`:
+ *
+ * - the origin sent no bytes at all,
+ * - it sent bytes the browser would not turn into a document,
+ * - it sent a real page that happens to have no text in the requested format.
+ */
+function describeEmptiness(
+  status: number | null,
+  html: string,
+  raw: string | null,
+  response: Response | null,
+): string | null {
+  if (raw === null || raw === "") {
+    return `origin returned ${status ?? "no status"} with an empty body`
+  }
+  if (html === "") {
+    const contentType = response?.headers()["content-type"] ?? "an unknown content type"
+    return (
+      `the origin served ${contentType}, which the browser did not render as a document; ` +
+      `${raw.length} bytes are available with format: "raw"`
+    )
+  }
+  return null
+}
+
+/** A download is bytes on disk rather than a response body, so it is read as a stream. */
+async function readDownload(download: Download): Promise<string | null> {
+  try {
+    const stream = await download.createReadStream()
+    const chunks: Buffer[] = []
+    let bytes = 0
+    for await (const chunk of stream) {
+      bytes += (chunk as Buffer).length
+      // A download is untrusted input of unbounded size, and this one is headed
+      // for a SQLite row and a JSON response. Refuse rather than exhaust memory.
+      if (bytes > MAX_RAW_BYTES) return null
+      chunks.push(chunk as Buffer)
+    }
+    return Buffer.concat(chunks).toString("utf8")
+  } catch {
+    return null
+  }
+}
+
+async function readBody(response: Response | null): Promise<string | null> {
+  if (!response) return null
+  try {
+    const body = await response.body()
+    if (body.length > MAX_RAW_BYTES) return null
+    return body.toString("utf8")
+  } catch {
+    // Chromium discards some bodies once the page moves on. A body we cannot
+    // read is not a body we can serve.
+    return null
+  }
 }

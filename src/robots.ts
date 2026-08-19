@@ -106,6 +106,35 @@ function matchesPattern(pattern: string, path: string): boolean {
 }
 
 /**
+ * How specifically a rule matches a path, or null if it does not match at all.
+ *
+ * ## The trailing slash
+ *
+ * RFC 9309 is prefix matching over octets, so `Disallow: /search-jobs/` does not
+ * match `/search-jobs`. `careers.arm.com` writes exactly that, and their intent
+ * is not ambiguous — the directory and the directory's own page are the same
+ * place to everyone except a string comparison.
+ *
+ * So a pattern ending in `/` also matches the path without it, **exactly**: the
+ * directory itself, not `/search-jobs-2`. This is a deliberate deviation from
+ * the RFC, and it deviates in the direction of fetching less. Being technically
+ * permitted is not the same as being welcome, and telling those two apart is the
+ * whole purpose of this service.
+ *
+ * The directory-form match reports the length of the pattern **without** its
+ * slash, which is what keeps it from over-blocking: a site that writes
+ * `Disallow: /docs/` alongside `Allow: /docs` has said something specific about
+ * the bare path, and the two now tie at length 5 — where `Allow` wins.
+ */
+function matchLength(rule: Rule, path: string): number | null {
+  if (matchesPattern(rule.pattern, path)) return rule.pattern.length
+  if (rule.pattern.endsWith("/") && matchesPattern(`${rule.pattern.slice(0, -1)}$`, path)) {
+    return rule.pattern.length - 1
+  }
+  return null
+}
+
+/**
  * RFC 9309: the most specific match wins, measured in octets, and an `Allow`
  * beats a `Disallow` of equal length.
  */
@@ -113,8 +142,8 @@ export function isAllowed(rules: readonly Rule[], path: string): boolean {
   let best: { allow: boolean; length: number } | null = null
 
   for (const rule of rules) {
-    if (!matchesPattern(rule.pattern, path)) continue
-    const length = rule.pattern.length
+    const length = matchLength(rule, path)
+    if (length === null) continue
     if (!best || length > best.length || (length === best.length && rule.allow)) {
       best = { allow: rule.allow, length }
     }

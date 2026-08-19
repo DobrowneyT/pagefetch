@@ -143,7 +143,7 @@ Response:
 | Argument | Required | Default | Meaning |
 |---|---|---|---|
 | `url` | yes | — | The page to fetch |
-| `format` | no | `markdown` | `markdown`, `text`, or `html` |
+| `format` | no | `markdown` | `markdown`, `text`, `html`, or `raw` |
 | `wait_for` | no | — | CSS selector to await before capture |
 | `max_age` | no | server TTL | Seconds; `0` forces a refresh |
 
@@ -182,6 +182,37 @@ cached, so inspecting it costs nothing.
 **`fetched_at` on a cache hit is when the page was fetched, not when you read
 it.** That is the point of the field: it tells you whether you are reading
 something captured now or six days ago.
+
+#### `format: "raw"` for anything that is not a page
+
+`markdown`, `text` and `html` are all derived from the **rendered document**.
+`raw` is the response body exactly as the origin sent it, before the browser made
+a document out of it — which is what you want for sitemaps, XML, JSON, and
+anything served as a file rather than a page.
+
+```json
+{ "url": "https://example.org/Sitemap/Scholarships.xml", "format": "raw" }
+```
+
+This is the polite way to enumerate a site: read its sitemap once instead of
+walking its pagination.
+
+Two things are worth knowing:
+
+- **It is still fetched by the browser**, so it carries the same cookies,
+  connection and TLS as any other fetch. On a challenged host that is the
+  difference between the bytes and a 403 — measured, on
+  `scholarshipscanada.com`, where the browser gets 200 and an ordinary HTTP
+  client gets 403 for the same URL.
+- **`raw` and the rendered formats are cached together.** One fetch answers
+  both, in either order, with no second request to the origin.
+
+**A 200 with an empty body is never reported as `ok`.** If the origin serves
+something the browser will not render as a document — XML that is too large, or a
+file with `Content-Disposition: attachment` — a rendered format returns
+`origin_error` naming the content type and telling you the bytes are available as
+`raw`. Silence dressed as success is the one failure a consumer cannot detect, so
+it does not happen.
 
 **`max_age` is in seconds, and `0` forces a refresh.** Omit it to accept the
 server's TTL. Asking for the same page in a different `format` does **not**
@@ -253,6 +284,10 @@ re-reads of something you already fetched.
 and `content: null`. Nothing you pass can make it fetch — that is the point of
 it being free.
 
+A page cached only as `raw` is a miss for a rendered format, and vice versa. The
+`detail` says `not cached as <format>` so you can tell that apart from never
+having fetched the page at all.
+
 ---
 
 ## The error contract
@@ -268,7 +303,7 @@ closed set, and each has a defined answer to "should I retry?".
 | `rate_limited` | Our own limiter | Retry after `retry_after` seconds |
 | `domain_benched` | Backoff after prior blocks, or a domain disabled after repeated ones | **Stop.** Report to the human. |
 | `not_found` | 404 | Do not retry |
-| `origin_error` | The origin is broken or unreachable — a 5xx, a refused connection, a DNS or TLS failure | Retry **once**, then report it. Not our problem to route around. |
+| `origin_error` | The origin is broken or unreachable — a 5xx, a refused connection, a DNS or TLS failure — **or** it served something the browser did not render as a document | Retry **once**, then report it. Not our problem to route around. If `detail` mentions `raw`, retry with `format: "raw"` instead. |
 | `timeout` | Render exceeded budget | Retry **once**, with a longer `wait_for` |
 | `invalid_url` | Rejected by URL validation | **Stop.** This is a bug in your code or an attack. |
 

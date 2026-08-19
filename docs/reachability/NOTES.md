@@ -213,3 +213,108 @@ to the site. That is why this mode is in scope and a stealth plugin is not.
 
 It also explains the earlier results without any appeal to luck: every mode that
 failed had `webdriver: true`, and the one that succeeded had `webdriver: false`.
+
+## `careers.arm.com`: the letter versus the intent (#13)
+
+`careers.arm.com/robots.txt` says `Disallow: /search-jobs/`, **with a trailing
+slash**. We requested `/search-jobs` **without** one. Under RFC 9309 those are
+different strings for prefix matching, so the fetch was permitted and the parser
+was behaving correctly. `RESULTS.md` recorded it as `ok`, twice.
+
+The site's intent is not ambiguous, and telling "technically permitted" apart
+from "welcome" is the entire purpose of this service.
+
+**Decided: a pattern ending in `/` also matches the bare path, exactly.**
+`Disallow: /search-jobs/` now covers `/search-jobs`, and does not touch
+`/search-jobs-archive`. This is a deliberate deviation from RFC 9309 and it
+deviates in the direction of fetching **less**.
+
+The over-blocking risk is real and is handled by the specificity length. A
+directory-form match reports the length of the pattern *without* its slash, so a
+site that writes `Disallow: /docs/` alongside `Allow: /docs` has said something
+specific about the bare path and the two tie at length 5 — where `Allow` wins,
+per RFC 9309. That case is a fixture in both the unit and container suites, so
+the deviation cannot quietly widen.
+
+The alternative — a per-domain config skip list, the mirror image of
+`PAGEFETCH_ROBOTS_OVERRIDE` — was not built. It fixes one host at a time where
+this fixes the class. It remains the right tool if a host ever needs an
+exception that is not about a trailing slash.
+
+`careers.arm.com/search-jobs` now returns `blocked_robots`. That is one fewer
+reachable job board, and it is the correct answer.
+
+## Sitemaps, and why the browser has to fetch them (#12)
+
+`scholarshipscanada.com/Sitemap/Scholarships.xml` returned `ok`, status 200, and
+an **empty body**. Chromium built no document from it, so `page.content()` was
+empty, and every format is derived from the DOM. Success with no content is the
+one failure a consumer cannot detect.
+
+`format: "raw"` returns the response body as the origin sent it. That sitemap is
+now **6,815,093 bytes carrying 32,630 `<loc>` entries** — the polite way to
+enumerate the site, instead of walking its pagination.
+
+**The obvious implementation does not work, and this is the part worth
+remembering.** The plan was to fetch raw through Playwright's
+`context.request.get()`, which shares the browser context's cookie jar. Measured,
+on the same URL, in the same context, seconds apart:
+
+| Path | Result |
+|---|---|
+| `page.goto()` → `response.body()` | **200**, 6.8 MB |
+| `context.request.get()` | **403**, a 4.5 KB interstitial |
+
+`APIRequestContext` is a **Node-side HTTP client**. It carries the cookies and
+none of the rest — connection, TLS, HTTP/2 fingerprint — so on a challenged host
+it is refused exactly as `curl` is. The clearance cookie is not the whole of what
+makes the browser acceptable.
+
+So raw is read off the response the browser already fetched. That costs the
+origin nothing extra, and it is browser traffic by construction rather than by
+arrangement.
+
+Two consequences worth knowing:
+
+- **Chromium renders small XML and downloads large XML.** A 198-byte fixture gets
+  the built-in XML viewer's markup; a 6.8 MB sitemap gets nothing. So the DOM
+  being empty is not a reliable signal on its own, and neither is content-type.
+- **A download aborts the navigation.** `page.goto()` rejects with "Download is
+  starting" before the download event is dispatched, so the event has to be
+  waited for rather than assumed to have fired. `raw` reads the stream; every
+  other format returns `origin_error` naming the file and pointing at `raw`.
+
+**`robots.txt` is now fetched as `raw` too.** Read through the DOM it depended on
+Chromium choosing to render the origin's content-type, and an origin serving it
+as a download would have produced an empty policy — which parses as "no
+restrictions" and would have quietly handed us a site we had no permission to
+crawl. Challenge detection still runs against the bytes, so a challenged
+`robots.txt` is still `blocked_challenge`.
+
+## The consumers were never wired to a route that exists (#14)
+
+`ai-scholarship-search/.agents/lib/src/fetch.ts` POSTed to whatever
+`PAGEFETCH_URL` named. `PAGEFETCH_URL` is the service's **base** URL and the
+plain-JSON endpoint is `/fetch` beneath it, so a correctly configured client
+**404'd on every call**. Confirmed against the running service: `POST /` → 404,
+`POST /fetch` → 200.
+
+Its whole unit suite passed throughout, because the stub transport answered
+whatever URL it was given. That is the class of bug a stub cannot find, and the
+reason `tests/live.test.ts` now exists there — excluded from the default suite,
+three assertions, and the first time that client has spoken to a real server.
+
+**The rest of #14 cannot be done yet, and not for a technical reason.** The
+skills it describes do not exist:
+
+| Repo | What is actually there |
+|---|---|
+| `ai-scholarship-search` | `_template` only. No source skill for any aggregator. |
+| `ai-job-search` | `adzuna-search` only — a documented JSON API, not scraping, and it has never been blocked. |
+
+`reed-search`, `totaljobs-search`, `linkedin-search` and `jobindex-search` are
+names from `VPS_SCRAPER_MCP_SPEC.md`'s forward plan, not built skills. Wiring a
+fallback into them means **writing them first**, which is a scraper per site and
+belongs in those repos rather than in a wiring task. The seam is in the template,
+the client is fixed, and the fallback is proven end to end — what is missing is
+the sources.

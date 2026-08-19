@@ -111,8 +111,12 @@ ${rows.join("\n")}
 - **\`blocked_robots\` is not a failure of the build.** The site stated it does
   not want automated access, and pagefetch respects that. It will never become
   reachable, and nothing here should be bent to make it so.
-- **\`blocked_challenge\` means a stock browser with a persistent profile was
-  refused.** The correct response is to stop, not to escalate.
+- **\`blocked_challenge\` is a verdict on the method, not on the site.** A
+  launched browser reads \`navigator.webdriver: true\`; one you launched yourself
+  and attached to reads \`false\`, because it was never set. Several rows here
+  changed on exactly that, so re-measure through \`docs/BYOB.md\` before treating
+  a challenge as final. Escalating capability is in scope; escalating deception
+  is not, and never becomes so.
 - **\`origin_error\` is the site being broken**, not the site refusing us. Those
   are different findings and the codes keep them apart.
 - **Rows are per URL, not per site.** A site can allow its homepage and disallow

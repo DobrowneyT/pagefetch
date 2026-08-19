@@ -58,6 +58,20 @@ const CHALLENGE_CLEARS_PAGE = `<!doctype html>
   <script>setTimeout(() => location.replace("/plain"), 2000)</script>
 </body></html>`
 
+/**
+ * A sitemap. The reason `format: "raw"` exists: Chromium makes no useful
+ * document out of this — small ones get the built-in XML viewer's own markup,
+ * large ones get nothing at all — so every rendered format returns either noise
+ * or an empty string, and only the bytes are the answer.
+ */
+const SITEMAP_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>http://fixture:3000/plain</loc></url>
+  <url><loc>http://fixture:3000/csr</loc></url>
+  <url><loc>http://fixture:3000/spa</loc></url>
+</urlset>
+`
+
 const html = (res, status, body, headers = {}) => {
   res.writeHead(status, { "content-type": "text/html; charset=utf-8", ...headers })
   res.end(body)
@@ -84,6 +98,16 @@ Allow: /private/public
 
 User-agent: SomeOtherBot
 Disallow: /
+`,
+
+  // careers.arm.com, in miniature. `Disallow: /search-jobs/` with a trailing
+  // slash does not match `/search-jobs` under RFC 9309 prefix matching, and the
+  // `/docs` pair is the case where honouring the intent must NOT over-block:
+  // the site said something specific about the bare path and gets it.
+  trailingslash: `User-agent: *
+Disallow: /search-jobs/
+Disallow: /docs/
+Allow: /docs
 `,
 }
 
@@ -136,6 +160,37 @@ const routes = {
   // Under the disallowed subtree, and the exception inside it.
   "/private/secret": (res) => html(res, 200, "<html><body><h1>Secret</h1></body></html>"),
   "/private/public/ok": (res) => html(res, 200, "<html><body><h1>Public exception</h1></body></html>"),
+
+  // --- format: "raw" -------------------------------------------------------
+
+  "/sitemap.xml": (res) => {
+    res.writeHead(200, { "content-type": "text/xml; charset=utf-8" })
+    res.end(SITEMAP_XML)
+  },
+  // The same bytes, served the way an origin serves a file rather than a page.
+  // Chromium aborts the navigation for this and there is no response body to
+  // read — only a download — so it is the other half of the raw path.
+  "/sitemap-download.xml": (res) => {
+    res.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "content-disposition": "attachment; filename=sitemap.xml",
+    })
+    res.end(SITEMAP_XML)
+  },
+  // A 200 carrying nothing. Reporting `ok` with empty content here would be
+  // indistinguishable from a successful fetch of a blank page.
+  "/empty-200": (res) => {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+    res.end("")
+  },
+
+  // --- robots trailing slash (#13) -----------------------------------------
+  // Reachable on the trailingslash-fixture alias, whose robots.txt writes
+  // `Disallow: /search-jobs/` — the letter of which permits the bare path.
+  "/search-jobs": (res) => html(res, 200, "<html><body><h1>Job search</h1></body></html>"),
+  "/search-jobs-archive": (res) => html(res, 200, "<html><body><h1>Archive</h1></body></html>"),
+  "/docs": (res) => html(res, 200, "<html><body><h1>Docs index</h1></body></html>"),
+  "/docs/internal": (res) => html(res, 200, "<html><body><h1>Internal</h1></body></html>"),
 }
 
 /** Echoes back whatever jar the browser presented, so tests can see it. */
@@ -159,6 +214,9 @@ function serveRobots(req, res) {
   }
   if (host.startsWith("challengerobots")) {
     return html(res, 403, CHALLENGE_PAGE, { "cf-mitigated": "challenge" })
+  }
+  if (host.startsWith("trailingslash")) {
+    return text(res, 200, ROBOTS_BY_HOST.trailingslash)
   }
   return text(res, 200, ROBOTS_BY_HOST.fixture)
 }

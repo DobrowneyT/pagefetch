@@ -29,9 +29,13 @@ The browser is one process with **one context per domain**, each seeded from tha
 domain's stored `storageState` so cookies survive a restart, and it restarts
 itself when its process tree outgrows `PAGEFETCH_MEMORY_RESTART_MB` (#9).
 
-**Still open:** the `origin_error` decision (#4 — a 500 currently returns `ok`)
-and the reachability measurement tooling (#10). The rest is in `docs/PRD.md` and
-issue #1.
+`format: "raw"` returns the response body as the origin sent it (#12), which is
+how sitemaps and any other non-document are read — the three rendered formats all
+go through the DOM, and a sitemap has none. No format ever answers `ok` with an
+empty body.
+
+**Still open:** wiring the consumers to the sites now known reachable (#14). The
+rest is in `docs/PRD.md` and issue #1.
 
 ## Read first
 
@@ -72,19 +76,52 @@ domain that refused it.
 
 ## Hard constraints
 
-Not judgement calls. They keep the shared VPS egress IP in good standing.
+Revised 2026-08-19, after the reachability work. The line they draw is
+**capability, not deception**.
 
-- No CAPTCHA solving. No third-party solving services, ever.
-- No fingerprint spoofing, no stealth plugins. A stock browser with a persistent
-  profile, or nothing.
-- No authenticated scraping, no stored site logins.
-- No general browser automation — four read-only tools, no click or type.
-- `robots.txt` respected by default. An override is a per-domain **config** entry,
-  never a request parameter, so no caller can override policy at call time.
-- Never behind the public reverse proxy.
-- **If a site blocks a stock browser with a persistent profile, the answer is to
-  stop, not to escalate.** This service is not a way around a site that has
-  decided it does not want automated access.
+### Absolute. Do not weigh these against anything.
+
+- **No CAPTCHA solving.** No third-party solving services, ever.
+- **No fingerprint spoofing, no stealth plugins, no user-agent games.** In
+  particular, never patch `navigator.webdriver`. A browser that was launched by
+  automation and claims it was not is lying, and that is the entire prohibition
+  in one sentence.
+- **`robots.txt` respected by default.** An override is a per-domain **config**
+  entry, never a request parameter, so no caller can relax policy at call time.
+  A `blocked_robots` is a full stop, not a problem to solve.
+- **Never behind the public reverse proxy.** Loopback plus a tunnel.
+- **No continuous crawling.** A few hundred pages a week is the design point, and
+  the politeness caps stay server-side so no caller can exceed them by insistence.
+
+### The capability line
+
+Attaching to a browser a person launched normally leaves `navigator.webdriver`
+`false` **because it was never set**. That is categorically different from
+setting it back to `false`, and it is why attached mode is in scope while a
+stealth plugin is not.
+
+**Improving what we genuinely are is in scope. Misrepresenting what we are is
+not.** Running headful, attaching instead of launching, keeping a real cookie
+jar, waiting longer for a managed challenge to clear — all fine. Claiming to be
+something we are not — never.
+
+### Revised, and why
+
+- **A challenge refusal is an answer about the method, not about the site.** The
+  old rule said stop as soon as a stock browser is blocked. That rule cost us two
+  reachable aggregators: the challenge was *hiding the robots policy*, and behind
+  it `scholarshipscanada.com` turns out to have no `User-agent: *` group at all.
+  Escalate capability within the line above, then stop.
+- **Four read-only tools is a surface-area decision, not a moral one.** No click
+  or type today because each is attack surface and a rate-limiting problem — not
+  because interaction is forbidden, and not because a human must be in the loop.
+  A fifth tool needs a reason worth both costs.
+- **Attached mode inherits whatever session the browser already has.** We do not
+  store site credentials and never log in on anyone's behalf; a person's own
+  logged-in browser is theirs. Two things stay in view before relying on it: a
+  logged-in session is usually governed by terms that say considerably more than
+  `robots.txt` does, and the consequences of getting it wrong land on a named
+  account rather than on an IP address.
 
 ## Design decisions already settled
 
@@ -149,14 +186,6 @@ that a challenge was hiding.
 **A `blocked_robots` is still an answer.** Three aggregators and LinkedIn's job
 search refuse by stated policy, and no browser changes that. Do not treat those
 as problems to solve.
-
-**Note on the constraints below.** The maintainer has said some were scoping
-decisions to stop an agent burning time on blocked sites, rather than standing
-policy — specifically "stop if a site blocks a stock browser", "no general
-browser automation", and "no authenticated scraping". Treat those three as open
-questions for the maintainer, not as settled. The rest still hold, and the
-`navigator.webdriver` distinction in `docs/reachability/NOTES.md` is the line
-that matters: not automating a launch is fine, patching the flag is not.
 
 ## Issues
 

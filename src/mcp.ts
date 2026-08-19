@@ -39,8 +39,9 @@ const URL_PROPERTY = {
 const SHARED_FETCH_PROPERTIES = {
   format: {
     type: "string",
-    enum: ["markdown", "text", "html"],
-    description: "Shape of the returned content. Defaults to markdown.",
+    enum: ["markdown", "text", "html", "raw"],
+    description:
+      "Shape of the returned content. Defaults to markdown. The first three are derived from the rendered page; \"raw\" is the response body exactly as the origin sent it, which is what you want for sitemaps, XML and JSON — anything the browser does not turn into a document.",
   },
   wait_for: {
     type: "string",
