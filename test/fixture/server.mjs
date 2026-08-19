@@ -188,6 +188,9 @@ const routes = {
   // Reachable on the trailingslash-fixture alias, whose robots.txt writes
   // `Disallow: /search-jobs/` — the letter of which permits the bare path.
   "/search-jobs": (res) => html(res, 200, "<html><body><h1>Job search</h1></body></html>"),
+  // Under the disallowed subtree. On the real site this is the AJAX endpoint the
+  // rule exists to protect, which is the whole reason the bare path is allowed.
+  "/search-jobs/results": (res) => html(res, 200, "<html><body><h1>AJAX results</h1></body></html>"),
   "/search-jobs-archive": (res) => html(res, 200, "<html><body><h1>Archive</h1></body></html>"),
   "/docs": (res) => html(res, 200, "<html><body><h1>Docs index</h1></body></html>"),
   "/docs/internal": (res) => html(res, 200, "<html><body><h1>Internal</h1></body></html>"),

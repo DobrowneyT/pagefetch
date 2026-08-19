@@ -53,6 +53,17 @@ export interface Config {
    */
   robotsOverride: Set<string>
   /**
+   * Hosts refused outright, whatever their `robots.txt` permits.
+   *
+   * The mirror image of the override, and a config entry for the same reason: a
+   * decision to stop fetching a site is a person's to make, not a caller's.
+   * Host-level and deliberately so — path granularity is what robots.txt is
+   * for, and a second dialect of it here would just be guessing at intent in a
+   * new place. Use it when a site has asked us directly, or when its terms say
+   * more than its robots.txt does.
+   */
+  robotsDeny: Set<string>
+  /**
    * Hostnames exempt from the private-address rejection.
    *
    * This exists so the test suite can point the browser at a fixture container
@@ -127,6 +138,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cacheTtlSeconds: number(env, "PAGEFETCH_CACHE_TTL_SECONDS", 604_800),
     robotsTtlSeconds: number(env, "PAGEFETCH_ROBOTS_TTL_SECONDS", 86_400),
     robotsOverride: hostSet(env.PAGEFETCH_ROBOTS_OVERRIDE),
+    robotsDeny: hostSet(env.PAGEFETCH_ROBOTS_DENY),
     allowHosts: hostSet(env.PAGEFETCH_ALLOW_HOSTS),
   }
 }

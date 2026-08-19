@@ -6,6 +6,13 @@
  * `blocked_robots` must stay distinguishable from every failure code, and the
  * override must stay a config entry that no caller can reach at call time.
  *
+ * There are two config entries, and both are deliberately coarse and host-level:
+ * `PAGEFETCH_ROBOTS_OVERRIDE` fetches a host regardless of what it wrote, and
+ * `PAGEFETCH_ROBOTS_DENY` refuses one regardless. Neither takes a path. Path
+ * granularity is what robots.txt itself is for, and inventing a second dialect
+ * of it in configuration is how you end up guessing at intent — see the note on
+ * `isAllowed` for what that cost.
+ *
  * ## Reading robots.txt requires the browser
  *
  * On the sites this service exists for, `robots.txt` is itself behind the
@@ -106,44 +113,35 @@ function matchesPattern(pattern: string, path: string): boolean {
 }
 
 /**
- * How specifically a rule matches a path, or null if it does not match at all.
- *
- * ## The trailing slash
- *
- * RFC 9309 is prefix matching over octets, so `Disallow: /search-jobs/` does not
- * match `/search-jobs`. `careers.arm.com` writes exactly that, and their intent
- * is not ambiguous — the directory and the directory's own page are the same
- * place to everyone except a string comparison.
- *
- * So a pattern ending in `/` also matches the path without it, **exactly**: the
- * directory itself, not `/search-jobs-2`. This is a deliberate deviation from
- * the RFC, and it deviates in the direction of fetching less. Being technically
- * permitted is not the same as being welcome, and telling those two apart is the
- * whole purpose of this service.
- *
- * The directory-form match reports the length of the pattern **without** its
- * slash, which is what keeps it from over-blocking: a site that writes
- * `Disallow: /docs/` alongside `Allow: /docs` has said something specific about
- * the bare path, and the two now tie at length 5 — where `Allow` wins.
- */
-function matchLength(rule: Rule, path: string): number | null {
-  if (matchesPattern(rule.pattern, path)) return rule.pattern.length
-  if (rule.pattern.endsWith("/") && matchesPattern(`${rule.pattern.slice(0, -1)}$`, path)) {
-    return rule.pattern.length - 1
-  }
-  return null
-}
-
-/**
  * RFC 9309: the most specific match wins, measured in octets, and an `Allow`
  * beats a `Disallow` of equal length.
+ *
+ * ## The trailing slash, and why this follows the standard exactly
+ *
+ * `Disallow: /search-jobs/` does not match `/search-jobs`. This briefly did not
+ * hold — a pattern ending in `/` was made to match the bare path too, on the
+ * theory that a site writing the slash means the directory and its own page.
+ *
+ * `careers.arm.com` is the counter-example that settles it. Its entire
+ * robots.txt is one rule, `Disallow:/search-jobs/`, and the paths beneath it are
+ * that platform's AJAX endpoints — `/search-jobs/results`,
+ * `/search-jobs/resultspost`. The site leaves every `/job/<slug>/…` detail page
+ * allowed, so reading it as "job search is closed to crawlers" is incoherent:
+ * you cannot block the index while publishing every entry. And a site that
+ * wanted the whole area blocked would write `Disallow: /search-jobs`, which is
+ * both shorter and what actually does it.
+ *
+ * So the slash is precise rather than sloppy, and guessing otherwise
+ * over-blocked a page the site permits — the exact failure the error contract
+ * exists to prevent. When a host genuinely needs refusing beyond what it wrote,
+ * that is a config decision a person makes: `PAGEFETCH_ROBOTS_DENY`.
  */
 export function isAllowed(rules: readonly Rule[], path: string): boolean {
   let best: { allow: boolean; length: number } | null = null
 
   for (const rule of rules) {
-    const length = matchLength(rule, path)
-    if (length === null) continue
+    if (!matchesPattern(rule.pattern, path)) continue
+    const length = rule.pattern.length
     if (!best || length > best.length || (length === best.length && rule.allow)) {
       best = { allow: rule.allow, length }
     }
@@ -172,6 +170,17 @@ export class Robots {
 
   async check(target: URL): Promise<RobotsVerdict> {
     const host = target.hostname.toLowerCase()
+
+    // Checked before the override, so a host named in both is refused rather
+    // than fetched. Two contradictory config entries are a mistake, and the
+    // safe reading of a mistake is the one that does not touch the origin.
+    if (this.config.robotsDeny.has(host)) {
+      return {
+        allowed: false,
+        code: "blocked_robots",
+        detail: `${host} is in PAGEFETCH_ROBOTS_DENY — refused by local policy, not by its robots.txt`,
+      }
+    }
 
     // The override is a config entry and never a request parameter, so no caller
     // can relax policy at call time. It is logged every time it is used, because
@@ -205,7 +214,9 @@ export class Robots {
    * one; pretending would be worse than admitting it.
    */
   peek(target: URL): "allowed" | "disallowed" | "unknown" {
-    if (this.config.robotsOverride.has(target.hostname.toLowerCase())) return "allowed"
+    const host = target.hostname.toLowerCase()
+    if (this.config.robotsDeny.has(host)) return "disallowed"
+    if (this.config.robotsOverride.has(host)) return "allowed"
 
     const cached = this.store.lookupRobots(target.origin, this.config.robotsTtlSeconds)
     if (!cached) return "unknown"

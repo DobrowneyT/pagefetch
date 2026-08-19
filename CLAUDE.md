@@ -86,9 +86,14 @@ Revised 2026-08-19, after the reachability work. The line they draw is
   particular, never patch `navigator.webdriver`. A browser that was launched by
   automation and claims it was not is lying, and that is the entire prohibition
   in one sentence.
-- **`robots.txt` respected by default.** An override is a per-domain **config**
-  entry, never a request parameter, so no caller can relax policy at call time.
-  A `blocked_robots` is a full stop, not a problem to solve.
+- **`robots.txt` respected by default, and read as written.** Both the override
+  and the deny list are per-host **config** entries, never request parameters, so
+  no caller can move policy at call time. A `blocked_robots` is a full stop, not
+  a problem to solve.
+  **Do not "improve" the matching rules.** RFC 9309 exactly — a trailing slash
+  means the subtree and not the bare path. Guessing that a site "can't have meant
+  that" over-blocked `careers.arm.com`, whose one-line robots.txt is precise;
+  `docs/reachability/NOTES.md` has the full case and the general lesson.
 - **Never behind the public reverse proxy.** Loopback plus a tunnel.
 - **No continuous crawling.** A few hundred pages a week is the design point, and
   the politeness caps stay server-side so no caller can exceed them by insistence.

@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { fetchPage } from "./client.js"
+import { call, fetchPage } from "./client.js"
 
 const FIXTURE = "http://fixture:3000"
 
@@ -107,32 +107,62 @@ test("no request parameter can override robots", async () => {
   }
 })
 
-test("a trailing-slash Disallow covers the bare path", async () => {
-  // careers.arm.com writes `Disallow: /search-jobs/`. Under strict RFC 9309
-  // prefix matching the bare `/search-jobs` is permitted, which is the letter of
-  // what they wrote and plainly not what they meant. Being technically allowed
-  // is not the same as being welcome.
+test("a trailing-slash Disallow does not cover the bare path", async () => {
+  // RFC 9309, and careers.arm.com is why it is followed exactly: its whole
+  // robots.txt is `Disallow:/search-jobs/`, the paths beneath it are that
+  // platform's AJAX endpoints, and every job detail page is left allowed. This
+  // briefly matched the bare path and refused a page the site permits.
   const outcome = await fetchPage({ url: "http://trailingslash-fixture:3000/search-jobs" })
 
-  assert.equal(outcome.code, "blocked_robots", `expected blocked_robots, got ${outcome.code}: ${outcome.detail}`)
-  assert.equal(outcome.content, null)
-})
-
-test("the trailing-slash rule does not over-block a longer sibling path", async () => {
-  // The risk of the deviation. `/search-jobs-archive` shares a prefix with
-  // `/search-jobs` but is a different place, and must stay fetchable.
-  const outcome = await fetchPage({ url: "http://trailingslash-fixture:3000/search-jobs-archive" })
-
   assert.equal(outcome.code, "ok", `expected ok, got ${outcome.code}: ${outcome.detail}`)
-  assert.match(outcome.content ?? "", /Archive/)
+  assert.match(outcome.content ?? "", /Job search/)
 })
 
-test("an explicit Allow on the bare path still wins", async () => {
-  // `Disallow: /docs/` with `Allow: /docs` is a site saying the index is fine
-  // and the tree is not. The directory-form match ties rather than beating it.
+test("the subtree the rule actually names is still refused", async () => {
+  const outcome = await fetchPage({ url: "http://trailingslash-fixture:3000/search-jobs/results" })
+  assert.equal(outcome.code, "blocked_robots", `expected blocked_robots, got ${outcome.code}: ${outcome.detail}`)
+})
+
+test("a longer sibling path is unaffected either way", async () => {
+  const outcome = await fetchPage({ url: "http://trailingslash-fixture:3000/search-jobs-archive" })
+  assert.equal(outcome.code, "ok", `expected ok, got ${outcome.code}: ${outcome.detail}`)
+})
+
+test("an explicit Allow on the bare path is honoured", async () => {
   const index = await fetchPage({ url: "http://trailingslash-fixture:3000/docs" })
   assert.equal(index.code, "ok", `expected ok, got ${index.code}: ${index.detail}`)
 
   const inside = await fetchPage({ url: "http://trailingslash-fixture:3000/docs/internal" })
   assert.equal(inside.code, "blocked_robots", `expected blocked_robots, got ${inside.code}: ${inside.detail}`)
+})
+
+test("a host in the deny list is refused whatever its robots.txt permits", async () => {
+  // The mirror image of the override, and the deliberate way to refuse a site
+  // whose robots.txt does not refuse us — a person's decision, in config, that
+  // no caller can reach. PAGEFETCH_ROBOTS_DENY names this host.
+  const outcome = await fetchPage({ url: "http://deny-fixture:3000/plain" })
+
+  assert.equal(outcome.code, "blocked_robots", `expected blocked_robots, got ${outcome.code}: ${outcome.detail}`)
+  assert.equal(outcome.content, null)
+  assert.match(String(outcome.detail), /PAGEFETCH_ROBOTS_DENY/)
+})
+
+test("the deny list never reaches the origin", async () => {
+  // Local policy must cost the origin nothing at all — not even a robots.txt
+  // read, which we would otherwise do first.
+  await resetCounts()
+  await fetchPage({ url: "http://deny-fixture:3000/plain?silence" })
+  const seen = await counts()
+
+  assert.equal(seen["deny-fixture /plain?silence"], undefined, "a denied host was actually requested")
+})
+
+test("the deny list does not leak to any other host", async () => {
+  const outcome = await fetchPage({ url: `${FIXTURE}/plain` })
+  assert.equal(outcome.code, "ok", "the deny list leaked to a host it does not name")
+})
+
+test("check_reachable reports a denied host without asking it", async () => {
+  const { body } = await call("check_reachable", { url: "http://deny-fixture:3000/plain" })
+  assert.equal(body.robots, "disallowed")
 })

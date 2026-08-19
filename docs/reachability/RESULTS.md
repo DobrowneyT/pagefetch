@@ -10,7 +10,7 @@ summarised away.
 
 | URL | Code | Status | Content | Verdict | Runs | Last checked |
 |---|---|---|---|---|---|---|
-| `careers.arm.com/search-jobs` | `blocked_robots` | — | — | robots policy — not a technical block | 2 | 2026-08-19 |
+| `careers.arm.com/search-jobs` | `ok` | 200 | 7447 | reachable | 3 | 2026-08-19 |
 | `grants-search.turn2us.org.uk/` | `ok` | 200 | 3005 | reachable | 1 | 2026-08-17 |
 | `grants-search.turn2us.org.uk/search` | `blocked_robots` | — | — | robots policy — not a technical block | 2 | 2026-08-19 |
 | `scholartree.ca/scholarships` | `blocked_robots` | — | — | robots policy — not a technical block | 2 | 2026-08-19 |

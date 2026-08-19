@@ -42,35 +42,28 @@ test("an empty Disallow disallows nothing", () => {
   assert.equal(allowed("User-agent: *\nDisallow:", "/anything"), true)
 })
 
-test("a trailing-slash Disallow covers the bare path — issue #13", () => {
-  // careers.arm.com writes `Disallow: /search-jobs/`. Under strict RFC 9309
-  // prefix matching `/search-jobs` is permitted, which is the letter of what
-  // they wrote and obviously not what they meant.
+test("a trailing-slash Disallow does not cover the bare path — RFC 9309", () => {
+  // careers.arm.com's entire robots.txt is `Disallow:/search-jobs/`, and the
+  // paths beneath it are that platform's AJAX endpoints. It leaves every
+  // /job/<slug>/… detail page allowed, so reading the slash as "job search is
+  // closed" is incoherent — you cannot block the index while publishing every
+  // entry. This briefly matched the bare path and over-blocked a page ARM
+  // permits.
   const arm = "User-agent: *\nDisallow: /search-jobs/"
-  assert.equal(allowed(arm, "/search-jobs"), false)
+  assert.equal(allowed(arm, "/search-jobs"), true)
+  assert.equal(allowed(arm, "/search-jobs?k=embedded"), true)
+
+  // The subtree is still refused, which is what the rule actually says.
   assert.equal(allowed(arm, "/search-jobs/"), false)
-  assert.equal(allowed(arm, "/search-jobs/12345"), false)
+  assert.equal(allowed(arm, "/search-jobs/results"), false)
+  assert.equal(allowed(arm, "/search-jobs/resultspost"), false)
 })
 
-test("the trailing-slash rule matches the directory only, not a longer sibling", () => {
-  // The risk of the deviation is over-blocking. `/search-jobs-archive` shares a
-  // prefix with `/search-jobs` but is a different place, and stays fetchable.
-  const arm = "User-agent: *\nDisallow: /search-jobs/"
-  assert.equal(allowed(arm, "/search-jobs-archive"), true)
-  assert.equal(allowed(arm, "/search-jobsomething"), true)
-  assert.equal(allowed(arm, "/careers"), true)
-})
-
-test("a site that deliberately allows the bare path still gets it", () => {
-  // The one case where the deviation could take something away. `Allow: /docs`
-  // and `Disallow: /docs/` together is a site saying the index page is fine and
-  // the tree is not; the directory-form match ties rather than beating it, so
-  // the Allow wins and the site gets what it asked for.
-  const robots = `User-agent: *
-Disallow: /docs/
-Allow: /docs`
-  assert.equal(allowed(robots, "/docs"), true)
-  assert.equal(allowed(robots, "/docs/internal"), false)
+test("a prefix match is a prefix match, not a path-segment match", () => {
+  // The other half of RFC 9309 that is tempting to improve on. `Disallow: /a`
+  // really does cover `/abc`, and a site that means otherwise writes `/a/`.
+  assert.equal(allowed("User-agent: *\nDisallow: /search-jobs", "/search-jobs-archive"), false)
+  assert.equal(allowed("User-agent: *\nDisallow: /search-jobs/", "/search-jobs-archive"), true)
 })
 
 test("Disallow: / still blocks everything", () => {

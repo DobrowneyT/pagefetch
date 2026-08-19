@@ -299,7 +299,7 @@ closed set, and each has a defined answer to "should I retry?".
 |---|---|---|
 | `ok` | Fetched | Proceed |
 | `blocked_challenge` | Interstitial; not reachable this way | **Stop.** Tell the human the page is unreachable. |
-| `blocked_robots` | Disallowed by `robots.txt` | **Stop.** This is policy, not a failure. Do not look for a workaround. |
+| `blocked_robots` | Disallowed by `robots.txt`, or by the operator's own deny list | **Stop.** This is policy, not a failure. Do not look for a workaround. |
 | `rate_limited` | Our own limiter | Retry after `retry_after` seconds |
 | `domain_benched` | Backoff after prior blocks, or a domain disabled after repeated ones | **Stop.** Report to the human. |
 | `not_found` | 404 | Do not retry |

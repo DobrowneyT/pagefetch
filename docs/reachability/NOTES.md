@@ -214,35 +214,64 @@ to the site. That is why this mode is in scope and a stealth plugin is not.
 It also explains the earlier results without any appeal to luck: every mode that
 failed had `webdriver: true`, and the one that succeeded had `webdriver: false`.
 
-## `careers.arm.com`: the letter versus the intent (#13)
+## `careers.arm.com`: a trailing slash that turned out to be deliberate (#13)
 
-`careers.arm.com/robots.txt` says `Disallow: /search-jobs/`, **with a trailing
-slash**. We requested `/search-jobs` **without** one. Under RFC 9309 those are
+**Reversed. The first decision here was wrong, and the correction is the useful
+part of this section.**
+
+`careers.arm.com/robots.txt` is, in its entirety:
+
+```
+User-agent: *
+Disallow:/search-jobs/
+```
+
+We requested `/search-jobs`, without the slash. Under RFC 9309 those are
 different strings for prefix matching, so the fetch was permitted and the parser
-was behaving correctly. `RESULTS.md` recorded it as `ok`, twice.
+was behaving correctly. That looked like a site being let down by a typo, and the
+first fix made a pattern ending in `/` also match the bare path — reasoning that
+"the directory and the directory's own page are the same place to everyone except
+a string comparison".
 
-The site's intent is not ambiguous, and telling "technically permitted" apart
-from "welcome" is the entire purpose of this service.
+**They are not the same place here, and the evidence was already written down in
+another repo.** `ai-job-search`'s `arm-search` skill had investigated this and
+concluded the opposite:
 
-**Decided: a pattern ending in `/` also matches the bare path, exactly.**
-`Disallow: /search-jobs/` now covers `/search-jobs`, and does not touch
-`/search-jobs-archive`. This is a deliberate deviation from RFC 9309 and it
-deviates in the direction of fetching **less**.
+> robots.txt on careers.arm.com only disallows `/search-jobs/` (trailing slash)
+> — the AJAX endpoints used for client-side pagination/sorting/facet filtering
+> (`/search-jobs/results`, `/search-jobs/resultspost`,
+> `/search-jobs/GetSearchRequestGeoLocation`). This skill never calls those.
 
-The over-blocking risk is real and is handled by the specificity length. A
-directory-form match reports the length of the pattern *without* its slash, so a
-site that writes `Disallow: /docs/` alongside `Allow: /docs` has said something
-specific about the bare path and the two tie at length 5 — where `Allow` wins,
-per RFC 9309. That case is a fixture in both the unit and container suites, so
-the deviation cannot quietly widen.
+Two things settle it:
 
-The alternative — a per-domain config skip list, the mirror image of
-`PAGEFETCH_ROBOTS_OVERRIDE` — was not built. It fixes one host at a time where
-this fixes the class. It remains the right tool if a host ever needs an
-exception that is not about a trailing slash.
+- **ARM leaves every `/job/<slug>/…` detail page allowed.** Reading the rule as
+  "job search is closed to crawlers" requires believing they blocked the index
+  while publishing every entry in it. That is incoherent.
+- **A site that wanted the whole area blocked would write `Disallow: /search-jobs`.**
+  No slash. It is shorter to write and it is what actually does it. Writing the
+  slash blocks the subtree and only the subtree, which on a Radancy TalentBrew
+  site is exactly the expensive endpoints.
 
-`careers.arm.com/search-jobs` now returns `blocked_robots`. That is one fewer
-reachable job board, and it is the correct answer.
+So the slash is precise rather than sloppy, and the normalisation over-blocked a
+page the site permits — which is the failure `CLAUDE.md` names directly: a wrong
+code makes an agent give up on a reachable page.
+
+**Now: RFC 9309 exactly, plus `PAGEFETCH_ROBOTS_DENY`.** The per-host skip list
+the first decision rejected turns out to be the right shape after all. It is
+config-only, host-level, and the mirror image of `PAGEFETCH_ROBOTS_OVERRIDE`: a
+person decides a site is off limits, and no caller can reach the decision at call
+time. It takes no path, deliberately — path granularity is what robots.txt is
+for, and a second dialect of it in configuration is how you end up guessing at
+intent somewhere new.
+
+`careers.arm.com/search-jobs` is `ok` again, and `/search-jobs/results` — the
+thing the rule actually names — is `blocked_robots`.
+
+**The general lesson, which is worth more than the ARM case.** "The site can't
+have meant that" is a claim about someone else's intent, made from one line of
+their configuration. Here the counter-evidence was one directory away, in a repo
+that had already done the work. Read the whole robots.txt, and check what a site
+*allows* before concluding what it meant to forbid.
 
 ## Sitemaps, and why the browser has to fetch them (#12)
 
