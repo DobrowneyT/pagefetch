@@ -89,3 +89,62 @@ Chromium treats it as a download rather than a document, so there is no DOM to
 serialise. pagefetch renders *pages*; a raw asset needs the response body. A
 `format: "raw"` that returns the body via the context's request API — carrying
 the same cookies — would close this, and would be a small addition.
+
+## Round two, 2026-08-19 — reading the policies we could not read before
+
+Ten targets through the attached browser. The point was never to get past
+`robots.txt`; it was that two sites hid theirs behind a challenge, so we could
+not tell "refuses crawlers" from "refuses us". Now we can read them, and the
+answer differs per site.
+
+### Scholarship aggregators
+
+| Site | Previously | Now | Why |
+|---|---|---|---|
+| `scholarshipscanada.com` | `blocked_challenge` | **`ok`** | No `User-agent: *` group at all |
+| `findaphd.com` | `blocked_challenge` | **`ok`** | robots says `Allow: /` explicitly |
+| `scholarship-search.org.uk` | `blocked_challenge` | `blocked_robots` | Genuinely `Disallow: /` |
+| `grants-search.turn2us.org.uk/search` | `blocked_robots` | `blocked_robots` | Unchanged |
+| `scholartree.ca/scholarships` | `blocked_robots` | `blocked_robots` | Unchanged |
+
+**Two of five, up from zero.** The PRD recorded `findaphd.com` as "403 **and**
+robots `Disallow: /`". The 403 was real; the robots claim was wrong — it carries
+`Allow: /` and disallows only `/uploads/`, `/common/clickcount.asp` and similar.
+Three sites remain refused **by stated policy**, which is an answer and stays one.
+
+### Career sites
+
+| Site | Result |
+|---|---|
+| `linkedin.com/jobs/search` | `blocked_robots` — a bare `Disallow: /` |
+| `totaljobs.com` | `ok` |
+| `reed.co.uk` | `ok` — "418 Embedded Engineer Jobs" |
+| `jobindex.dk` | `ok` |
+| `careers.arm.com/search-jobs` | `ok`, **but see below** |
+
+`VPS_SCRAPER_MCP_SPEC.md` guessed `linkedin-search`, `totaljobs-search` and
+`reed-search` were the blocked ones. Only LinkedIn is, and by policy rather than
+by challenge — no browser changes that.
+
+### One case where we are on the letter and not the spirit
+
+`careers.arm.com/robots.txt` says `Disallow: /search-jobs/` **with a trailing
+slash**. We requested `/search-jobs` **without** one. Under RFC 9309 prefix
+matching those are different strings, so the fetch was allowed and the parser is
+correct — but the site's intent is not ambiguous.
+
+**Treat ARM's job search as disallowed.** Add `careers.arm.com` to a per-domain
+skip rather than leaning on a trailing slash. Being technically permitted is not
+the same as being welcome, and this service exists to tell the difference.
+
+### Torn
+
+`torn.com/forums.php` is **allowed** by robots — 347 `Disallow` rules and
+`forums.php` is not among them (`forumreport.php` and `forumsearch.php` are).
+
+It fetches, and returns **77 characters**: "Login / Forums". The forum content is
+behind authentication, so the page is reachable and empty. Nothing about a
+browser changes that; it would need a logged-in session.
+
+Torn publishes an official API at `api.torn.com`, which is the sanctioned route
+and does not require pretending a scraper is a person.

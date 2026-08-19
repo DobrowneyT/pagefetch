@@ -10,12 +10,18 @@ summarised away.
 
 | URL | Code | Status | Content | Verdict | Runs | Last checked |
 |---|---|---|---|---|---|---|
+| `careers.arm.com/search-jobs` | `ok` | 200 | 8458 | reachable | 1 | 2026-08-19 |
 | `grants-search.turn2us.org.uk/` | `ok` | 200 | 3005 | reachable | 1 | 2026-08-17 |
-| `grants-search.turn2us.org.uk/search` | `blocked_robots` | — | — | robots policy — not a technical block | 1 | 2026-08-17 |
-| `scholartree.ca/scholarships` | `blocked_robots` | — | — | robots policy — not a technical block | 1 | 2026-08-17 |
-| `www.findaphd.com/` | `blocked_challenge` | 403 | — | refused — challenge did not clear | 1 | 2026-08-17 |
-| `www.scholarship-search.org.uk/` | `blocked_challenge` | — | — | refused — challenge did not clear | 1 | 2026-08-17 |
+| `grants-search.turn2us.org.uk/search` | `blocked_robots` | — | — | robots policy — not a technical block | 2 | 2026-08-19 |
+| `scholartree.ca/scholarships` | `blocked_robots` | — | — | robots policy — not a technical block | 2 | 2026-08-19 |
+| `www.findaphd.com/` | `ok` | 200 | 3344 | reachable | 2 | 2026-08-19 |
+| `www.jobindex.dk/jobsoegning?q=embedded` | `ok` | 200 | 12184 | reachable | 1 | 2026-08-19 |
+| `www.linkedin.com/jobs/search?keywords=embedded%20engineer` | `blocked_robots` | — | — | robots policy — not a technical block | 1 | 2026-08-19 |
+| `www.reed.co.uk/jobs/embedded-engineer-jobs` | `ok` | 200 | 9024 | reachable | 1 | 2026-08-19 |
+| `www.scholarship-search.org.uk/` | `blocked_robots` | — | — | robots policy — not a technical block | 2 | 2026-08-19 |
 | `www.scholarshipscanada.com/` | `blocked_challenge` | — | — | refused — challenge did not clear | 1 | 2026-08-17 |
+| `www.torn.com/forums.php` | `ok` | 200 | 77 | reachable | 1 | 2026-08-19 |
+| `www.totaljobs.com/jobs/embedded-engineer` | `ok` | 200 | 4981 | reachable | 1 | 2026-08-19 |
 
 ## Reading this
 
