@@ -263,14 +263,21 @@ A blocked domain that keeps getting retried is precisely how an address gets per
 
 ## Out of Scope
 
-- **CAPTCHA solving.** No third-party solving services, ever.
-- **Fingerprint spoofing and stealth plugins.** No `puppeteer-extra-plugin-stealth` or equivalent. A stock browser with a persistent profile, or nothing.
-- **Authenticated scraping.** No storing site logins. If a page needs an account, it is out of scope.
-- **Continuous crawling.** This is not a crawler. A few hundred pages a week is the design point.
-- **Bulk or commercial data collection.**
-- **General browser automation.** No click, type, or form submission. Four read-only tools.
-- **A public endpoint.** Loopback plus tunnel. Never behind the public reverse proxy.
-- **Being a way around a site that has decided it does not want automated access.** If a site blocks a stock browser with a persistent profile, the answer is to stop.
+> **Partly superseded, 2026-08-20. `CLAUDE.md`'s "Hard constraints" is the current
+> text; where the two differ, that one wins.** Three entries below were revised
+> after the reachability work, and this section is left intact rather than
+> rewritten because the reasoning is worth keeping. An agent reading only this
+> list gave a confidently wrong answer about attached mode, which is what
+> prompted the note.
+
+- **CAPTCHA solving.** No third-party solving services, ever. *(Unchanged, absolute.)*
+- **Fingerprint spoofing and stealth plugins.** No `puppeteer-extra-plugin-stealth` or equivalent. A stock browser with a persistent profile, or nothing. *(Unchanged, absolute — and now sharper: never patch `navigator.webdriver`.)*
+- **Authenticated scraping.** No storing site logins. If a page needs an account, it is out of scope. — **Revised.** The service still stores no credentials and never logs in on anyone's behalf. But **attached mode is the operator's own browser**, so it inherits whatever session that browser already has; a person's own logged-in browser is theirs. See `CLAUDE.md`.
+- **Continuous crawling.** This is not a crawler. A few hundred pages a week is the design point. *(Unchanged.)*
+- **Bulk or commercial data collection.** *(Unchanged.)*
+- **General browser automation.** No click, type, or form submission. Four read-only tools. — **Revised.** Still true of the built tools, but as a **surface-area** decision rather than a prohibition: each is attack surface and a rate-limiting problem. A fifth tool needs a reason worth both.
+- **A public endpoint.** Loopback plus tunnel. Never behind the public reverse proxy. *(Unchanged, absolute.)*
+- **Being a way around a site that has decided it does not want automated access.** If a site blocks a stock browser with a persistent profile, the answer is to stop. — **Revised.** A challenge refusal is an answer about the *method*, not the site: this rule cost two reachable aggregators, because the challenge was hiding a `robots.txt` that permitted us. Escalating **capability** is in scope; escalating **deception** never is. A `blocked_robots` is still a full stop.
 
 These are not hedges. They are the design constraints that keep the VPS IP in good standing, which is the actual operational risk.
 
