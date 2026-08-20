@@ -4,12 +4,13 @@
 contract for consumers. You should not need to read the server's source to use
 it correctly, and if you find yourself doing so, that is a bug in this document.
 
-> **Status: not built yet.** The service is specified in [PRD.md](PRD.md) and
-> filed as issue #1. This document describes the contract it will honour, so
-> that consumers can be written against it and so the build has a fixed target.
-> Until it exists, every consumer must behave as though pagefetch is unconfigured
-> — see [When pagefetch is unavailable](#when-pagefetch-is-unavailable), which is
-> the normal case today.
+> **Status: built.** All four tools work over both transports. This document is
+> the contract the service honours, and it is kept ahead of the code rather than
+> behind it — if the two disagree, this document is the bug report.
+>
+> It remains **optional infrastructure**. Most people running a consuming repo
+> will never have it, so [When pagefetch is unavailable](#when-pagefetch-is-unavailable)
+> is still a first-class path and not an error path.
 
 ---
 
@@ -142,7 +143,7 @@ Response:
 | Argument | Required | Default | Meaning |
 |---|---|---|---|
 | `url` | yes | — | The page to fetch |
-| `format` | no | `markdown` | `markdown`, `text`, or `html` |
+| `format` | no | `markdown` | `markdown`, `text`, `html`, or `raw` |
 | `wait_for` | no | — | CSS selector to await before capture |
 | `max_age` | no | server TTL | Seconds; `0` forces a refresh |
 
@@ -152,14 +153,99 @@ Returns `code`, `status`, `url_final`, `fetched_at`, `from_cache`, `content`.
 service captures on its own heuristic, which may catch a half-rendered page. If
 you are parsing award cards, wait for an award card.
 
+**`wait_for` applies to cached answers too.** It means "this content is not
+complete until the selector exists", so a cached page that does not contain the
+selector is not served — it is refetched. You cannot be handed a stored page
+that never had what you asked for. Verifying this costs no network traffic.
+
+#### Fragment routes need a `wait_for`, and probably not the one you think
+
+For a hash-routed page — `example.com/app.php#/thread/123` — the fragment never
+reaches the server, so the app mounts **empty** and fills in afterwards. Without a
+`wait_for` you will reliably capture the shell.
+
+Waiting on the mount point does not help either: it ships in the initial HTML, so
+it already exists. Wait for it to gain a **child**:
+
+```json
+{
+  "url": "https://www.torn.com/forums.php#/p=threads&f=46&t=15907925",
+  "wait_for": "#forums-page-wrap > *"
+}
+```
+
+`<mount> > *` generalises to any SPA of this shape. Without it that URL returns 77
+characters; with it, the full thread. Find the mount point by fetching once
+without `wait_for` and looking at the shell's element ids — that first fetch is
+cached, so inspecting it costs nothing.
+
+**`fetched_at` on a cache hit is when the page was fetched, not when you read
+it.** That is the point of the field: it tells you whether you are reading
+something captured now or six days ago.
+
+#### `format: "raw"` for anything that is not a page
+
+`markdown`, `text` and `html` are all derived from the **rendered document**.
+`raw` is the response body exactly as the origin sent it, before the browser made
+a document out of it — which is what you want for sitemaps, XML, JSON, and
+anything served as a file rather than a page.
+
+```json
+{ "url": "https://example.org/Sitemap/Scholarships.xml", "format": "raw" }
+```
+
+This is the polite way to enumerate a site: read its sitemap once instead of
+walking its pagination.
+
+Two things are worth knowing:
+
+- **It is still fetched by the browser**, so it carries the same cookies,
+  connection and TLS as any other fetch. On a challenged host that is the
+  difference between the bytes and a 403 — measured, on
+  `scholarshipscanada.com`, where the browser gets 200 and an ordinary HTTP
+  client gets 403 for the same URL.
+- **`raw` and the rendered formats are cached together.** One fetch answers
+  both, in either order, with no second request to the origin.
+
+**A 200 with an empty body is never reported as `ok`.** If the origin serves
+something the browser will not render as a document — XML that is too large, or a
+file with `Content-Disposition: attachment` — a rendered format returns
+`origin_error` naming the content type and telling you the bytes are available as
+`raw`. Silence dressed as success is the one failure a consumer cannot detect, so
+it does not happen.
+
+**`max_age` is in seconds, and `0` forces a refresh.** Omit it to accept the
+server's TTL. Asking for the same page in a different `format` does **not**
+refetch — formats are derived from what was already stored.
+
 **Check `url_final`.** If a redirect landed somewhere unexpected, this is where
-you find out. Do not assume it equals the URL you sent.
+you find out. Do not assume it equals the URL you sent. Two URLs that redirect
+to the same place share one cache entry, so a request for one can be served from
+a fetch of the other.
 
 ### `fetch_pages`
 
-The same, for a list. Runs through the rate limiter **sequentially**, not in
-parallel — that is a feature, not a limitation. Use it for "fetch these thirty
-pages" rather than thirty round trips, and expect it to take real time.
+The same, for a list. Pass `urls` (max **50**) plus any of `format`, `wait_for`
+and `max_age`, which apply to every URL.
+
+Runs through the rate limiter **sequentially**, not in parallel — that is a
+feature, not a limitation. Use it for "fetch these thirty pages" rather than
+thirty round trips, and expect it to take real time.
+
+```json
+{
+  "code": "ok",
+  "results": [
+    { "url": "https://example.org/a", "code": "ok", "content": "…", "from_cache": false, "…": "…" },
+    { "url": "https://example.org/b", "code": "not_found", "content": null, "…": "…" }
+  ]
+}
+```
+
+**Each URL is independent, and the top-level `code` only says the batch ran.**
+Read the per-entry codes. A batch of thirty where one domain is benched returns
+twenty-nine results and one `domain_benched` — you asked about thirty pages and
+you get what is known about all thirty.
 
 ### `check_reachable`
 
@@ -169,10 +255,53 @@ A cheap probe: is this fetchable, is it already cached, is the domain benched.
 agents wasting time. Learning that a domain is benched costs one cheap call
 instead of thirty rate-limited failures.
 
+```json
+{
+  "code": "domain_benched",
+  "url": "https://example.org/awards",
+  "from_cache": false,
+  "fetched_at": null,
+  "domain": "benched",
+  "robots": "allowed",
+  "detail": "example.org is benched"
+}
+```
+
+`code` is what `fetch_page` **would return right now**, as far as can be known
+without asking the origin. `from_cache` tells you whether a fetch would be free.
+
+#### `blocked_challenge` depends on which server you asked
+
+The same code means two different things, and `detail` is what tells them apart:
+
+- **from a launched browser** — Playwright started it, so `navigator.webdriver`
+  reads `true` and some origins refuse on that alone. An instance attached to a
+  browser a person launched may well get through. Measured: this is what moved
+  two of five scholarship aggregators from refused to reachable.
+- **from an attached browser** — capability is exhausted. Stop, and tell the
+  human. Nothing further is in scope: patching what the browser reports about
+  itself is not something this service will do.
+
+`GET /health` reports which one you are talking to as `mode`, either `launched`
+or `attached`. Worth checking once at startup rather than per request.
+
+**`robots` may be `unknown`, and that is honest.** This tool makes no network
+request whatsoever — that is what makes it cheap — so if we have not already read
+that domain's `robots.txt`, we will not go and read it just to answer a probe.
+`unknown` means "we would have to ask", not "there is no policy".
+
 ### `cache_lookup`
 
 Read-only cache query. No network, no rate limit, free. Use it freely for
 re-reads of something you already fetched.
+
+**A miss is a clean miss, not an error**: `code: "ok"` with `from_cache: false`
+and `content: null`. Nothing you pass can make it fetch — that is the point of
+it being free.
+
+A page cached only as `raw` is a miss for a rendered format, and vice versa. The
+`detail` says `not cached as <format>` so you can tell that apart from never
+having fetched the page at all.
 
 ---
 
@@ -184,11 +313,12 @@ closed set, and each has a defined answer to "should I retry?".
 | `code` | Meaning | What you must do |
 |---|---|---|
 | `ok` | Fetched | Proceed |
-| `blocked_challenge` | Interstitial; not reachable this way | **Stop.** Tell the human the page is unreachable. |
-| `blocked_robots` | Disallowed by `robots.txt` | **Stop.** This is policy, not a failure. Do not look for a workaround. |
+| `blocked_challenge` | Interstitial; not reachable **this way** | **Stop** — but read `detail`, which says whether another deployment could get through. |
+| `blocked_robots` | Disallowed by `robots.txt`, or by the operator's own deny list | **Stop.** This is policy, not a failure. Do not look for a workaround. |
 | `rate_limited` | Our own limiter | Retry after `retry_after` seconds |
-| `domain_benched` | Backoff after prior blocks | **Stop.** Report to the human. |
+| `domain_benched` | Backoff after prior blocks, or a domain disabled after repeated ones | **Stop.** Report to the human. |
 | `not_found` | 404 | Do not retry |
+| `origin_error` | The origin is broken or unreachable — a 5xx, a refused connection, a DNS or TLS failure — **or** it served something the browser did not render as a document | Retry **once**, then report it. Not our problem to route around. If `detail` mentions `raw`, retry with `format: "raw"` instead. |
 | `timeout` | Render exceeded budget | Retry **once**, with a longer `wait_for` |
 | `invalid_url` | Rejected by URL validation | **Stop.** This is a bug in your code or an attack. |
 
@@ -220,12 +350,21 @@ is actionable. "Something went wrong fetching the page" is not.
 Enforced server-side. You cannot exceed them by insistence, and you should not
 try.
 
-| Control | Value |
-|---|---|
-| Per-domain | ≥ 5 s between requests, max 20/hour |
-| Global concurrency | 2 pages at once |
-| After a 429/403 | That domain is benched for 1 hour |
-| 3 blocks in a day | Domain disabled until manually re-enabled |
+| Control | Value | How it is enforced |
+|---|---|---|
+| Per-domain spacing | ≥ 5 s between requests | By **waiting**. Your call takes longer; it does not fail. |
+| Per-domain quota | max 20/hour | By **refusing**, with `retry_after`. |
+| Global concurrency | 2 pages at once | By queueing. |
+| After a 429/403 | That domain is benched for 1 hour | `domain_benched` |
+| 3 blocks in a day | Domain disabled until manually re-enabled | `domain_benched`, with the reason in `detail` |
+
+**`robots.txt` counts against the quota**, because it is a real request to the
+origin. The first fetch to a new domain therefore uses two of the twenty.
+
+**`domain_benched` covers both benched and disabled**, because your answer is the
+same for each: stop and report it. Which one it is appears in `detail`, where it
+is a human's decision rather than something for you to branch on. Only a person
+can lift a disable.
 
 Design your caller around these rather than against them. If you need thirty
 pages from one domain, that is a `fetch_pages` call that takes a while, not

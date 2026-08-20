@@ -1,0 +1,14 @@
+# A memory threshold low enough that any real browser crosses it immediately, so
+# the restart path can be tested rather than assumed.
+#
+#   docker compose -p pagefetch-memory \
+#     -f compose.yml -f compose.test.yml -f compose.memory.yml up -d
+#
+# Chromium never runs in 1MB, which is the point: the first fetch is guaranteed
+# to trip the threshold, and the next one must still succeed.
+
+services:
+  pagefetch:
+    container_name: pagefetch-memory
+    environment:
+      PAGEFETCH_MEMORY_RESTART_MB: "1"

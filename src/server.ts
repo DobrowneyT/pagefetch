@@ -1,0 +1,154 @@
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
+import { timingSafeEqual } from "node:crypto"
+import type { Browser } from "./browser.js"
+import type { Config } from "./config.js"
+import { callTool, ToolError } from "./handler.js"
+import { handleMcp } from "./mcp.js"
+
+const MAX_BODY_BYTES = 64 * 1024
+
+function send(res: ServerResponse, status: number, body: unknown): void {
+  const payload = JSON.stringify(body)
+  res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(payload) })
+  res.end(payload)
+}
+
+/** Constant-time, and length-safe: comparing unequal lengths would throw. */
+function tokenMatches(presented: string, expected: string): boolean {
+  const a = Buffer.from(presented)
+  const b = Buffer.from(expected)
+  if (a.length !== b.length) return false
+  return timingSafeEqual(a, b)
+}
+
+function authorised(req: IncomingMessage, config: Config): boolean {
+  const header = req.headers.authorization
+  if (!header?.startsWith("Bearer ")) return false
+  return tokenMatches(header.slice("Bearer ".length), config.token)
+}
+
+async function readBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length
+    if (size > MAX_BODY_BYTES) throw new ToolError(413, "request body too large")
+    chunks.push(chunk as Buffer)
+  }
+  if (size === 0) throw new ToolError(400, "request body is empty")
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+  } catch {
+    throw new ToolError(400, "request body is not valid JSON")
+  }
+}
+
+export function createPagefetchServer(config: Config, browser: Browser): Server {
+  return createServer((req, res) => {
+    void handle(req, res, config, browser).catch((error) => {
+      console.error("[pagefetch] unhandled", error)
+      if (!res.headersSent) send(res, 500, { error: "internal error" })
+    })
+  })
+}
+
+async function handle(req: IncomingMessage, res: ServerResponse, config: Config, browser: Browser): Promise<void> {
+  const path = new URL(req.url ?? "/", "http://localhost").pathname
+
+  // Unauthenticated on purpose: it reveals nothing, it is loopback-only, and a
+  // container healthcheck should not need the bearer token baked into compose.
+  if (path === "/health" && req.method === "GET") {
+    send(res, 200, await browser.stats())
+    return
+  }
+
+  if (!authorised(req, config)) {
+    send(res, 401, { error: "unauthorized" })
+    return
+  }
+
+  // Both transports route into the same handler; this one only unwraps a
+  // JSON-RPC envelope on the way in and wraps the answer on the way out.
+  // The MCP Streamable HTTP transport lets a client open a server-to-client SSE
+  // stream with GET. We do not offer one — every response here is a direct reply
+  // to a POST — and the specification says a server that does not MUST answer
+  // 405 rather than 404. The difference matters to a strict client: 404 reads as
+  // "there is no such endpoint" and can sink the whole connection, where 405
+  // reads as "no stream here" and it proceeds to POST.
+  if (path === "/mcp" && req.method === "GET") {
+    res.setHeader("allow", "POST")
+    send(res, 405, { error: "GET /mcp is not supported; this transport has no server-to-client stream. POST here." })
+    return
+  }
+
+  if (path === "/mcp" && req.method === "POST") {
+    try {
+      const started = Date.now()
+      const payload = await readBody(req)
+      const reply = await handleMcp(browser, payload)
+
+      console.log(
+        JSON.stringify({
+          at: new Date().toISOString(),
+          transport: "mcp",
+          method: (payload as { method?: unknown })?.method ?? null,
+          ms: Date.now() - started,
+        }),
+      )
+
+      if (reply.body === null) {
+        res.writeHead(reply.status)
+        res.end()
+        return
+      }
+      send(res, reply.status, reply.body)
+    } catch (error) {
+      if (error instanceof ToolError) {
+        send(res, error.httpStatus, { error: error.message })
+        return
+      }
+      throw error
+    }
+    return
+  }
+
+  if (path !== "/fetch" || req.method !== "POST") {
+    send(res, 404, { error: `no route for ${req.method} ${path}` })
+    return
+  }
+
+  try {
+    const body = await readBody(req)
+    if (typeof body !== "object" || body === null) throw new ToolError(400, "request body must be a JSON object")
+
+    const { tool, arguments: args } = body as Record<string, unknown>
+    const started = Date.now()
+    const outcome = await callTool(browser, tool, args)
+
+    // Structured, so patterns are visible without instrumenting the callers.
+    // Every tool result carries a `code`; the rest varies by tool, and a batch
+    // reports the codes of what it contained rather than one of its own.
+    const shared = outcome as Partial<{ status: number | null; detail: string }>
+    const batch = outcome as Partial<{ results: { code: string }[] }>
+    console.log(
+      JSON.stringify({
+        at: new Date().toISOString(),
+        tool,
+        url: (args as Record<string, unknown>)?.url ?? null,
+        code: outcome.code,
+        status: shared.status ?? null,
+        ms: Date.now() - started,
+        detail: shared.detail ?? null,
+        ...(batch.results ? { batch: batch.results.map((entry) => entry.code) } : {}),
+      }),
+    )
+
+    send(res, 200, outcome)
+  } catch (error) {
+    if (error instanceof ToolError) {
+      send(res, error.httpStatus, { error: error.message })
+      return
+    }
+    throw error
+  }
+}

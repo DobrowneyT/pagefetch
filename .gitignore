@@ -5,13 +5,17 @@
 
 # Node / Bun
 node_modules/
+dist/
 *.tsbuildinfo
 
 # Browser profile and cache volumes — runtime state, often large
 profile/
 cache/
-*.jsonl
+# (reachability results are committed deliberately; see docs/reachability)
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Local attached-browser run: token, profile, cache
+.local/

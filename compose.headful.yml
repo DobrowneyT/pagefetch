@@ -1,0 +1,34 @@
+# Run the browser headful under a virtual display.
+#
+#   docker compose -p pagefetch-headful \
+#     -f compose.yml -f compose.headful.yml up -d
+#
+# WHY THIS IS NOT EVASION, since the distinction matters here more than usual:
+# nothing about what we claim to be changes. No fingerprint patching, no stealth
+# plugin, no user-agent games, no CAPTCHA service. We are running the browser the
+# way a browser is normally run, on a display, which is if anything MORE stock
+# than headless. It exists because headless Chromium is distinguishable from
+# headful without any spoofing on our part, so the claim "a stock browser with a
+# persistent profile" deserved a fair test before we accept a refusal as final.
+#
+# If a site still refuses after this, that is the answer and the answer is stop.
+
+services:
+  pagefetch:
+    container_name: pagefetch-headful
+    # Xvfb started explicitly rather than via xvfb-run: xvfb-run started the
+    # display but never ran the command, and it swallows stdout, so a failure
+    # looked like silence. `exec` keeps node as the signalled process.
+    command:
+      - sh
+      - -c
+      - "Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp & exec node dist/src/index.js"
+    environment:
+      PAGEFETCH_HEADLESS: "false"
+      DISPLAY: ":99"
+      # Longer than the 15s default, to rule out impatience as the reason a
+      # challenge did not clear. Patience is not evasion.
+      PAGEFETCH_CHALLENGE_BUDGET_MS: "45000"
+      PAGEFETCH_NAV_TIMEOUT_MS: "60000"
+    # A headful browser with a real compositor costs more than a headless one.
+    mem_limit: 3g

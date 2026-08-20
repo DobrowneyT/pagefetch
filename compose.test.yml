@@ -1,0 +1,76 @@
+# Overlay for the container test suite:
+#   docker compose -f compose.yml -f compose.test.yml up -d
+#
+# It adds a fixture origin on the pagefetch network and, for that host ONLY,
+# relaxes the private-address check — the fixture necessarily lives at a private
+# Docker address. PAGEFETCH_ALLOW_HOSTS is a config entry, never a request
+# parameter, so no caller can reach for this at call time.
+#
+# The redirect-hop test still bites: `fixture` is allowed, and 169.254.169.254
+# is not, so a redirect from one to the other is rejected on the hop.
+
+services:
+  pagefetch:
+    # Its own name and its own volume. The suite tears down with `down -v` to get
+    # a cold cache and a cold profile each run, and that must never be able to
+    # reach the production store — which holds the persistent profile, the single
+    # most valuable piece of state this service keeps.
+    container_name: pagefetch-test
+    volumes:
+      - pagefetch-test-data:/data
+    environment:
+      # Three aliases for one fixture container, so robots.txt can present a real
+      # policy, no file at all, and a policy behind a challenge.
+      PAGEFETCH_ALLOW_HOSTS: fixture,norobots-fixture,challengerobots-fixture,override-fixture,coldrobots-fixture,ratelimit-fixture,spacing-fixture,bench-fixture,disable-fixture,trailingslash-fixture,deny-fixture
+      # The general suite is not about politeness caps, and it makes far more
+      # than twenty requests to one fixture host. Caps are generous here and the
+      # limiter is exercised properly in its own stack — see compose.limits.yml.
+      # Benching is effectively off so a challenge fixture in one test cannot
+      # bench the host out from under the next one.
+      PAGEFETCH_MIN_DOMAIN_INTERVAL_SECONDS: "0.05"
+      PAGEFETCH_MAX_REQUESTS_PER_DOMAIN_HOUR: "1000"
+      PAGEFETCH_BENCH_MINUTES: "0.0001"
+      PAGEFETCH_BLOCKS_BEFORE_DISABLE: "1000"
+      # Deliberately overriding one host, so the test suite can prove an override
+      # works AND that it does not leak to any other host.
+      PAGEFETCH_ROBOTS_OVERRIDE: override-fixture
+      # And one host denied, so the mirror image is proven too — including that
+      # it does not leak to any other host.
+      PAGEFETCH_ROBOTS_DENY: deny-fixture
+      PAGEFETCH_ROBOTS_TTL_SECONDS: "3600"
+      PAGEFETCH_NAV_TIMEOUT_MS: "8000"
+      PAGEFETCH_SELECTOR_TIMEOUT_MS: "4000"
+      # Shorter than production so the suite stays quick. The fixture challenge
+      # clears in 2s, so this must comfortably exceed that.
+      PAGEFETCH_CHALLENGE_BUDGET_MS: "6000"
+    depends_on:
+      - fixture
+
+  fixture:
+    image: node:20-alpine
+    container_name: pagefetch-fixture
+    restart: unless-stopped
+    command: ["node", "/fixture/server.mjs"]
+    ports:
+      # Loopback only, and only so the suite can read the request counts that
+      # let it assert network silence. Not part of the fetch path.
+      - "127.0.0.1:3100:3000"
+    volumes:
+      - ./test/fixture:/fixture:ro
+    networks:
+      pagefetch:
+        aliases:
+          - fixture
+          - norobots-fixture
+          - challengerobots-fixture
+          - override-fixture
+          - coldrobots-fixture
+          - ratelimit-fixture
+          - spacing-fixture
+          - bench-fixture
+          - disable-fixture
+          - trailingslash-fixture
+          - deny-fixture
+
+volumes:
+  pagefetch-test-data:

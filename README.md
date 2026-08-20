@@ -5,8 +5,15 @@ driving a real browser inside its own Docker container. Built for the
 `ai-scholarship-search` and `ai-job-search` skills; usable by any agent on any
 machine once access is granted.
 
-> **Status: specified, not built.** The requirements are in
-> [`docs/PRD.md`](docs/PRD.md) and filed as issue #1. No code exists yet.
+> **Status: built.** All four tools, both transports, `robots.txt` enforced, the
+> cache on SQLite, the politeness caps enforced server-side, and the security
+> boundary proven by test against the real VPS. Every behavioural test runs
+> against `/fetch` and `/mcp` alike.
+>
+> **What it reaches is measured, not assumed.** Attached to a real browser
+> (`docs/BYOB.md`), two of the five scholarship aggregators fetch, three are
+> refused by `robots.txt`, and three of five job boards return real listings.
+> `docs/reachability/` holds the results and the reasoning.
 
 ## What it solves
 
@@ -30,11 +37,14 @@ answer for every agent across every repo.
 
 ## What it does not solve
 
-**Most sites that block us do so by `robots.txt` policy, not bot detection, and
-this service will not unlock them** — it respects robots by default. Measured
-against the aggregators that prompted this work, exactly one of five is a
-candidate. The full table is in the PRD's problem statement, and anyone judging
-whether this build succeeded should read it first.
+**Sites that refuse by `robots.txt` stay refused** — it respects robots by
+default, and that is an answer rather than an obstacle. Three of the five
+scholarship aggregators and LinkedIn's job search fall in that category.
+
+Measured results and the reasoning behind them live in
+[`docs/reachability/`](docs/reachability/). Read those before judging what this
+build did or did not deliver — several earlier verdicts turned out to be wrong,
+in both directions.
 
 ## Documentation
 
@@ -75,20 +85,32 @@ and `POST /fetch` (plain JSON, for zero-dependency CLIs).
 
 ## Non-negotiables
 
-These are design constraints, not preferences. They keep the VPS IP in good
-standing, which is the real operational risk — the address is shared with
-unrelated services.
+The line is **capability, not deception**: improving what this genuinely is stays
+in scope, and misrepresenting what it is never does.
 
 - ❌ No CAPTCHA solving, ever.
-- ❌ No fingerprint spoofing or stealth plugins. A stock browser with a
-  persistent profile, or nothing.
-- ❌ No authenticated scraping. No stored site logins.
-- ❌ No continuous crawling. A few hundred pages a week is the design point.
-- ❌ No general browser automation. Four read-only tools.
+- ❌ No fingerprint spoofing or stealth plugins, and **never a patched
+  `navigator.webdriver`**. A browser launched by automation that claims it was
+  not is lying — that is the whole prohibition.
+- ❌ No continuous crawling. A few hundred pages a week is the design point, and
+  the politeness caps are server-side so no caller can exceed them.
 - ❌ Never behind the public reverse proxy. Loopback plus tunnel.
-- ❌ Not a way around a site that has decided it does not want automated access.
-  **If a site blocks a stock browser with a persistent profile, the answer is to
-  stop.**
+- ❌ `robots.txt` is not negotiable at call time. The override is a per-domain
+  config entry, and a `blocked_robots` is an answer rather than an obstacle.
+
+✅ In scope, because none of it misrepresents anything: running headful,
+**attaching to a browser you launched yourself** rather than launching one,
+keeping a real cookie jar, and giving a managed challenge time to clear.
+
+Attaching leaves `navigator.webdriver` reading `false` **because it was never
+set** — categorically different from setting it back. That distinction is
+measured rather than asserted; see [`docs/reachability/NOTES.md`](docs/reachability/NOTES.md).
+
+Two design constraints are about surface area rather than principle, and can be
+revisited with a reason: **four read-only tools, no click or type** (each is
+attack surface and a rate-limiting problem), and **no stored site logins**
+(attached mode inherits whatever session your own browser already has, which is
+a different thing from this service holding credentials).
 
 ## Security
 

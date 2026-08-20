@@ -22,13 +22,32 @@ The second problem is that the failure is currently silent and unstructured. A 4
 
 **Most sites that block us are blocking by robots policy, not by bot detection, and this service will not unlock them.** Measured against the scholarship aggregators that prompted this work:
 
-| Site | Nature of the block | Does pagefetch help? |
+> **Measured 2026-08-17. The prediction below was wrong twice, and the answer for
+> usable listing data is zero of five.** Full results, and the tooling that
+> produced them, are in [`docs/reachability/RESULTS.md`](reachability/RESULTS.md)
+> and issue #10. The table is left as written, because a prediction is more
+> useful next to its outcome than quietly corrected.
+>
+> **Superseded 2026-08-19: two of five, not zero.** Attached to a real browser
+> (`docs/BYOB.md`), `scholarshipscanada.com` and `findaphd.com` both fetch. The
+> challenge was hiding their `robots.txt`, and neither disallows us — the first
+> has no `User-agent: *` group at all, the second says `Allow: /`. The row below
+> for `findaphd.com` claims a robots `Disallow: /` that does not exist. The other
+> three are refused by stated policy and stay refused.
+
+| Site | Predicted | Measured 2026-08-17 |
 |---|---|---|
-| `scholarshipscanada.com` | Cloudflare managed challenge | **Likely yes** |
-| `findaphd.com` | 403 **and** robots `Disallow: /` | No — robots policy |
-| `scholarship-search.org.uk` | robots `Disallow: /` | No — robots policy |
-| `grants-search.turn2us.org.uk` | robots `Disallow: /` | No — robots policy |
-| `scholartree.ca` | robots disallows `/scholarships` | No — robots policy |
+| `scholarshipscanada.com` | Cloudflare challenge — **likely yes** | `blocked_challenge`. Probed across three implementations — the tracer, after challenge-settling (#11), and behind the validating egress proxy with the browser's own TLS (#3). It refuses a stock browser. |
+| `findaphd.com` | 403 **and** robots `Disallow: /` | `blocked_challenge` — we never got far enough to read its robots. |
+| `scholarship-search.org.uk` | robots `Disallow: /` | `blocked_challenge` — its `robots.txt` is *itself* behind the challenge, so its policy is unknowable. |
+| `grants-search.turn2us.org.uk` | robots `Disallow: /` | **Prediction wrong.** Its robots says `Allow: /$` then `Disallow: /`, so under RFC 9309 longest-match the homepage is explicitly allowed and every listing path is not. `/` returns `ok`; `/search` returns `blocked_robots`. |
+| `scholartree.ca` | robots disallows `/scholarships` | `blocked_robots`. Prediction correct. |
+
+**Two of the five turned out to hide their `robots.txt` behind a challenge**,
+which the design did not anticipate: "check robots before fetching" is circular
+when the policy is unreadable. That case now refuses the domain and reports
+`blocked_challenge`, because inferring permission from a page we could not read
+would resolve every ambiguity in our own favour.
 
 pagefetch respects `robots.txt` by default. A site that has said "do not crawl this" is not a technical obstacle to route around; it is an answer. So the honest expected return on this build is **one** currently-blocked aggregator, plus every future site that turns out to be client-side rendered, plus the elimination of the wasted-discovery loop across every agent and repo. That is a reasonable return, and it is smaller than "unblocks the sites we cannot reach today".
 
@@ -142,10 +161,17 @@ Both route into one handler so behaviour cannot diverge. This exists because con
 and expects:
 
 ```json
-{ "status": "...", "code": "ok", "content": "...", "url_final": "...", "fetched_at": "...", "from_cache": false }
+{ "status": 200, "code": "ok", "content": "...", "url_final": "...", "fetched_at": "...", "from_cache": false }
 ```
 
 That client has never spoken to a real server. Either honour this shape or change it deliberately and update the consumer in the same change — do not leave them mismatched.
+
+**`status` is the origin's HTTP status as a number, and `code` carries the error
+contract.** They are not interchangeable: a `blocked_challenge` arrives with
+`status: 403`, and collapsing the two would throw away what the site actually
+said. An earlier draft of this document showed `status` as a string mirroring
+`code`; `docs/USING-PAGEFETCH.md` always had it as a number, and the number is
+correct. The consumer's type was corrected in the same change that settled this.
 
 ### Tool surface
 
@@ -171,6 +197,7 @@ Every failure returns a code from this closed set. Adding a code is an API chang
 | `rate_limited` | Our own limiter | Yes, after `retry_after` |
 | `domain_benched` | Backoff after prior blocks | **No.** Report to the human. |
 | `not_found` | 404 | No |
+| `origin_error` | Origin broken or unreachable — 5xx, refused connection, DNS or TLS failure | Once, then report |
 | `timeout` | Render exceeded budget | Once, with a longer `wait_for` |
 | `invalid_url` | Rejected by URL validation | **No.** A bug or an attack. |
 
@@ -236,14 +263,21 @@ A blocked domain that keeps getting retried is precisely how an address gets per
 
 ## Out of Scope
 
-- **CAPTCHA solving.** No third-party solving services, ever.
-- **Fingerprint spoofing and stealth plugins.** No `puppeteer-extra-plugin-stealth` or equivalent. A stock browser with a persistent profile, or nothing.
-- **Authenticated scraping.** No storing site logins. If a page needs an account, it is out of scope.
-- **Continuous crawling.** This is not a crawler. A few hundred pages a week is the design point.
-- **Bulk or commercial data collection.**
-- **General browser automation.** No click, type, or form submission. Four read-only tools.
-- **A public endpoint.** Loopback plus tunnel. Never behind the public reverse proxy.
-- **Being a way around a site that has decided it does not want automated access.** If a site blocks a stock browser with a persistent profile, the answer is to stop.
+> **Partly superseded, 2026-08-20. `CLAUDE.md`'s "Hard constraints" is the current
+> text; where the two differ, that one wins.** Three entries below were revised
+> after the reachability work, and this section is left intact rather than
+> rewritten because the reasoning is worth keeping. An agent reading only this
+> list gave a confidently wrong answer about attached mode, which is what
+> prompted the note.
+
+- **CAPTCHA solving.** No third-party solving services, ever. *(Unchanged, absolute.)*
+- **Fingerprint spoofing and stealth plugins.** No `puppeteer-extra-plugin-stealth` or equivalent. A stock browser with a persistent profile, or nothing. *(Unchanged, absolute — and now sharper: never patch `navigator.webdriver`.)*
+- **Authenticated scraping.** No storing site logins. If a page needs an account, it is out of scope. — **Revised.** The service still stores no credentials and never logs in on anyone's behalf. But **attached mode is the operator's own browser**, so it inherits whatever session that browser already has; a person's own logged-in browser is theirs. See `CLAUDE.md`.
+- **Continuous crawling.** This is not a crawler. A few hundred pages a week is the design point. *(Unchanged.)*
+- **Bulk or commercial data collection.** *(Unchanged.)*
+- **General browser automation.** No click, type, or form submission. Four read-only tools. — **Revised.** Still true of the built tools, but as a **surface-area** decision rather than a prohibition: each is attack surface and a rate-limiting problem. A fifth tool needs a reason worth both.
+- **A public endpoint.** Loopback plus tunnel. Never behind the public reverse proxy. *(Unchanged, absolute.)*
+- **Being a way around a site that has decided it does not want automated access.** If a site blocks a stock browser with a persistent profile, the answer is to stop. — **Revised.** A challenge refusal is an answer about the *method*, not the site: this rule cost two reachable aggregators, because the challenge was hiding a `robots.txt` that permitted us. Escalating **capability** is in scope; escalating **deception** never is. A `blocked_robots` is still a full stop.
 
 These are not hedges. They are the design constraints that keep the VPS IP in good standing, which is the actual operational risk.
 

@@ -1,0 +1,262 @@
+// A fixture origin for the container suite.
+//
+// Deliberately dependency-free and un-built so it can run in a bare node image
+// with a bind mount. It exists so the default suite is deterministic, offline,
+// and sends zero third-party traffic — constant live fetching is precisely the
+// impoliteness this service exists to avoid.
+import { createServer } from "node:http"
+
+const PORT = Number(process.env.PORT ?? 3000)
+
+/** A page whose content arrives only after JavaScript runs. An empty shell to plain HTTP. */
+const CSR_PAGE = `<!doctype html>
+<html><head><title>Awards</title></head>
+<body>
+  <div id="app"></div>
+  <script>
+    setTimeout(() => {
+      document.getElementById("app").innerHTML =
+        '<h1>Open awards</h1>' +
+        '<div class="award-card"><h2>Chancellor Scholarship</h2><p>Closes 30 September.</p></div>' +
+        '<div class="award-card"><h2>Rutherford Bursary</h2><p>Closes 14 October.</p></div>'
+    }, 250)
+  </script>
+</body></html>`
+
+/** A fragment route. The server never sees what follows "#"; only the browser does. */
+const SPA_PAGE = `<!doctype html>
+<html><head><title>SPA</title></head>
+<body>
+  <div id="view">no route</div>
+  <script>
+    const render = () => {
+      const route = location.hash.replace("#", "") || "/"
+      document.getElementById("view").innerHTML =
+        '<div class="route-content">rendered route: ' + route + '</div>'
+    }
+    addEventListener("hashchange", render)
+    render()
+  </script>
+</body></html>`
+
+/** What a CDN interstitial looks like. No evasion is attempted against it — it is here to be detected. */
+const CHALLENGE_PAGE = `<!doctype html>
+<html><head><title>Just a moment...</title></head>
+<body><div id="challenge-form">Checking your browser before accessing the site.</div></body></html>`
+
+/**
+ * A *managed* challenge: an interstitial that clears itself once its script has
+ * run, which is what a real browser is supposed to experience. Note the link —
+ * the real interstitial has one too, which is why waiting on a bare `a[href]`
+ * selector buys no time at all.
+ */
+const CHALLENGE_CLEARS_PAGE = `<!doctype html>
+<html><head><title>Just a moment...</title></head>
+<body>
+  <div id="challenge-form">Checking your browser before accessing the site.</div>
+  <a href="/plain">continue</a>
+  <script>setTimeout(() => location.replace("/plain"), 2000)</script>
+</body></html>`
+
+/**
+ * A sitemap. The reason `format: "raw"` exists: Chromium makes no useful
+ * document out of this — small ones get the built-in XML viewer's own markup,
+ * large ones get nothing at all — so every rendered format returns either noise
+ * or an empty string, and only the bytes are the answer.
+ */
+const SITEMAP_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>http://fixture:3000/plain</loc></url>
+  <url><loc>http://fixture:3000/csr</loc></url>
+  <url><loc>http://fixture:3000/spa</loc></url>
+</urlset>
+`
+
+const html = (res, status, body, headers = {}) => {
+  res.writeHead(status, { "content-type": "text/html; charset=utf-8", ...headers })
+  res.end(body)
+}
+
+const text = (res, status, body) => {
+  res.writeHead(status, { "content-type": "text/plain; charset=utf-8" })
+  res.end(body)
+}
+
+/**
+ * Requests counted per "host path", so tests can assert NETWORK SILENCE rather
+ * than trusting a flag. A cache hit that revalidated is not a cache hit, and a
+ * robots decision that refetched robots.txt every time is not a cached policy.
+ */
+const counts = new Map()
+
+const ROBOTS_BY_HOST = {
+  // The default host: one disallowed subtree with a more specific Allow inside
+  // it, so longest-match precedence is exercised rather than assumed.
+  fixture: `User-agent: *
+Disallow: /private
+Allow: /private/public
+
+User-agent: SomeOtherBot
+Disallow: /
+`,
+
+  // careers.arm.com, in miniature. `Disallow: /search-jobs/` with a trailing
+  // slash does not match `/search-jobs` under RFC 9309 prefix matching, and the
+  // `/docs` pair is the case where honouring the intent must NOT over-block:
+  // the site said something specific about the bare path and gets it.
+  trailingslash: `User-agent: *
+Disallow: /search-jobs/
+Disallow: /docs/
+Allow: /docs
+`,
+}
+
+const routes = {
+  "/csr": (res) => html(res, 200, CSR_PAGE),
+  "/spa": (res) => html(res, 200, SPA_PAGE),
+  "/challenge": (res) => html(res, 403, CHALLENGE_PAGE),
+  "/challenge-200": (res) => html(res, 200, CHALLENGE_PAGE),
+  "/challenge-clears": (res) => html(res, 403, CHALLENGE_CLEARS_PAGE, { "cf-mitigated": "challenge" }),
+  "/missing": (res) => html(res, 404, "<html><body>not here</body></html>"),
+  "/broken": (res) => html(res, 500, "<html><body><h1>Internal Server Error</h1></body></html>"),
+  "/gateway": (res) => html(res, 502, "<html><body>bad gateway</body></html>"),
+  "/plain": (res) => html(res, 200, "<html><body><h1>Plain page</h1><p>Static content.</p></body></html>"),
+
+  // The bypass that matters: a perfectly public URL that redirects into the
+  // cloud metadata endpoint. Validation must catch this ON THE HOP.
+  "/redirect-to-metadata": (res) => {
+    res.writeHead(302, { location: "http://169.254.169.254/latest/meta-data/" })
+    res.end()
+  },
+  "/redirect-to-loopback": (res) => {
+    res.writeHead(302, { location: "http://127.0.0.1:5432/" })
+    res.end()
+  },
+  // A public NAME that resolves to a private address. The URL text is entirely
+  // innocent; only resolution gives it away, which is why the proxy resolves.
+  "/redirect-to-dns-private": (res) => {
+    res.writeHead(302, { location: "http://localtest.me/" })
+    res.end()
+  },
+  // A benign redirect, so we can tell "redirects are broken" from "redirects are guarded".
+  "/redirect-to-csr": (res) => {
+    res.writeHead(302, { location: "/csr" })
+    res.end()
+  },
+  "/slow": (res) => {
+    setTimeout(() => html(res, 200, "<html><body>eventually</body></html>"), 60_000)
+  },
+
+  // Cookie-jar fixtures. The jar is the part of the persistent profile we own,
+  // and the part that makes us a returning visitor rather than a new one.
+  "/set-cookie": (res) => {
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "set-cookie": "pfjar=remembered; Path=/",
+    })
+    res.end("<html><body><h1>Cookie set</h1></body></html>")
+  },
+
+  // Under the disallowed subtree, and the exception inside it.
+  "/private/secret": (res) => html(res, 200, "<html><body><h1>Secret</h1></body></html>"),
+  "/private/public/ok": (res) => html(res, 200, "<html><body><h1>Public exception</h1></body></html>"),
+
+  // --- format: "raw" -------------------------------------------------------
+
+  "/sitemap.xml": (res) => {
+    res.writeHead(200, { "content-type": "text/xml; charset=utf-8" })
+    res.end(SITEMAP_XML)
+  },
+  // The same bytes, served the way an origin serves a file rather than a page.
+  // Chromium aborts the navigation for this and there is no response body to
+  // read — only a download — so it is the other half of the raw path.
+  "/sitemap-download.xml": (res) => {
+    res.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "content-disposition": "attachment; filename=sitemap.xml",
+    })
+    res.end(SITEMAP_XML)
+  },
+  // A 200 carrying nothing. Reporting `ok` with empty content here would be
+  // indistinguishable from a successful fetch of a blank page.
+  "/empty-200": (res) => {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+    res.end("")
+  },
+
+  // --- robots trailing slash (#13) -----------------------------------------
+  // Reachable on the trailingslash-fixture alias, whose robots.txt writes
+  // `Disallow: /search-jobs/` — the letter of which permits the bare path.
+  "/search-jobs": (res) => html(res, 200, "<html><body><h1>Job search</h1></body></html>"),
+  // Under the disallowed subtree. On the real site this is the AJAX endpoint the
+  // rule exists to protect, which is the whole reason the bare path is allowed.
+  "/search-jobs/results": (res) => html(res, 200, "<html><body><h1>AJAX results</h1></body></html>"),
+  "/search-jobs-archive": (res) => html(res, 200, "<html><body><h1>Archive</h1></body></html>"),
+  "/docs": (res) => html(res, 200, "<html><body><h1>Docs index</h1></body></html>"),
+  "/docs/internal": (res) => html(res, 200, "<html><body><h1>Internal</h1></body></html>"),
+}
+
+/** Echoes back whatever jar the browser presented, so tests can see it. */
+function serveShowCookie(req, res) {
+  const jar = req.headers.cookie ?? "none"
+  html(res, 200, `<html><body><h1>Cookies</h1><p id="jar">${jar}</p></body></html>`)
+}
+
+/**
+ * `robots.txt` varies by host so one fixture container can present the three
+ * cases that matter: a real policy, no file at all, and a policy we cannot read
+ * because the origin challenges us for it — which is what the site that prompted
+ * this whole build actually does.
+ */
+function serveRobots(req, res) {
+  const host = (req.headers.host ?? "").split(":")[0]
+
+  if (host.startsWith("norobots")) {
+    // No robots file. RFC 9309: absent means no restrictions.
+    return html(res, 404, "<html><body>no robots here</body></html>")
+  }
+  if (host.startsWith("challengerobots")) {
+    return html(res, 403, CHALLENGE_PAGE, { "cf-mitigated": "challenge" })
+  }
+  if (host.startsWith("trailingslash")) {
+    return text(res, 200, ROBOTS_BY_HOST.trailingslash)
+  }
+  return text(res, 200, ROBOTS_BY_HOST.fixture)
+}
+
+createServer((req, res) => {
+  const path = new URL(req.url, "http://fixture").pathname
+  const host = (req.headers.host ?? "").split(":")[0]
+
+  // The bookkeeping endpoints are not themselves counted, or they would show up
+  // in the very numbers they report.
+  if (path === "/__count") {
+    res.writeHead(200, { "content-type": "application/json" })
+    return res.end(JSON.stringify(Object.fromEntries(counts)))
+  }
+  if (path === "/__reset") {
+    counts.clear()
+    res.writeHead(200, { "content-type": "application/json" })
+    return res.end("{}")
+  }
+
+  // The query string is part of the key so tests can each use a distinct URL and
+  // assert on their own traffic. Test files run in parallel against one service,
+  // and counting by path alone would make every silence assertion a race.
+  const search = new URL(req.url, "http://fixture").search
+  const key = `${host} ${path}${search}`
+  counts.set(key, (counts.get(key) ?? 0) + 1)
+
+  if (path === "/robots.txt") return serveRobots(req, res)
+  if (path === "/show-cookie") return serveShowCookie(req, res)
+  // Preserves the query string, so a test can own its own redirect destination
+  // rather than sharing /csr with every other file in the suite.
+  if (path === "/redirect-preserving") {
+    res.writeHead(302, { location: `/csr${search}` })
+    return res.end()
+  }
+
+  const route = routes[path]
+  if (route) return route(res)
+  html(res, 404, "<html><body>no such fixture route</body></html>")
+}).listen(PORT, "0.0.0.0", () => console.log(`fixture listening on ${PORT}`))
