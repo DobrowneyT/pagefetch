@@ -270,6 +270,32 @@ instead of thirty rate-limited failures.
 `code` is what `fetch_page` **would return right now**, as far as can be known
 without asking the origin. `from_cache` tells you whether a fetch would be free.
 
+#### `ok` means "no known obstacle", not "this will work"
+
+The qualifier in that sentence — *as far as can be known* — is load-bearing, and
+it is the one thing to understand about this tool.
+
+This probe makes **no network request at all**. That is what makes it cheap, and
+it is also the limit of what it can tell you. `ok` means the domain is available
+and nothing stored says the fetch would be refused. It does not mean the fetch
+will succeed.
+
+**Read `robots` alongside `code`, and treat `unknown` as a real answer.** When
+the policy is unknown, `detail` always says why, because the three reasons are
+not equally informative:
+
+| `detail` says | What it means | What to do |
+|---|---|---|
+| never been read | We have not asked this origin anything yet | Fetch and see. The first fetch reads the policy first. |
+| lapsed, and it **allowed** the path | We read it, it permitted this, and the entry has aged out | Proceed. Likely fine. |
+| lapsed, and it **DISALLOWED** the path | We read it, it refused this, and the entry has aged out | Expect `blocked_robots`. Do not build a batch around it. |
+| could not be read | A challenge or an error hid `robots.txt` | Expect the same failure from the fetch. |
+
+A lapsed policy is not used to decide anything — RFC 9309 caps a cached
+`robots.txt` at twenty-four hours, and this service honours that — so the code
+stays `ok`. But "we read this yesterday and it said no" is a strong hint, and
+you get it for free rather than for thirty wasted fetches.
+
 #### `blocked_challenge` depends on which server you asked
 
 The same code means two different things, and `detail` is what tells them apart:
@@ -285,10 +311,10 @@ The same code means two different things, and `detail` is what tells them apart:
 `GET /health` reports which one you are talking to as `mode`, either `launched`
 or `attached`. Worth checking once at startup rather than per request.
 
-**`robots` may be `unknown`, and that is honest.** This tool makes no network
-request whatsoever — that is what makes it cheap — so if we have not already read
-that domain's `robots.txt`, we will not go and read it just to answer a probe.
-`unknown` means "we would have to ask", not "there is no policy".
+**`robots: "unknown"` means "we would have to ask", not "there is no policy".**
+We will not go and read a `robots.txt` just to answer a probe — that is the
+whole bargain. What we will do is tell you exactly what we do know about the
+gap, in `detail`, per the table above.
 
 ### `cache_lookup`
 

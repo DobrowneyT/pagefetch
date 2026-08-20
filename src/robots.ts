@@ -51,6 +51,28 @@ export interface RobotsVerdict {
 }
 
 /**
+ * What is known about a policy without asking the origin.
+ *
+ * `unknown` is three different situations wearing one word — never read, read
+ * and lapsed, read and unreadable — and they are not equally informative. "We
+ * read this yesterday and it said `Disallow: /`" is very nearly an answer; "we
+ * have never asked" is not. The probe collapsed all three to `unknown` beside a
+ * `code: "ok"`, and an agent told to branch on `code` walked into a certain
+ * refusal. So `detail` now carries the difference, in words, every time.
+ */
+export interface RobotsPeek {
+  /** What is known about the policy itself. */
+  state: "allowed" | "disallowed" | "unknown"
+  /**
+   * The code a fetch would refuse with on account of robots, if it would refuse.
+   * Absent means no *known* obstacle — which is not the same as "this will work".
+   */
+  code?: Code
+  /** One sentence for the caller. Always set when the state is not plainly allowed. */
+  detail?: string
+}
+
+/**
  * Parse the groups that apply to us.
  *
  * We are a stock browser and do not identify as a named crawler — no UA games,
@@ -150,6 +172,25 @@ export function isAllowed(rules: readonly Rule[], path: string): boolean {
   return best ? best.allow : true
 }
 
+/** Refused by local policy, said the same way wherever it is said. */
+function denyDetail(host: string): string {
+  return `${host} is in PAGEFETCH_ROBOTS_DENY — refused by local policy, not by its robots.txt`
+}
+
+/**
+ * How long ago, at a granularity a person can act on.
+ *
+ * "27.8 hours ago" is the sentence that would have made the LinkedIn probe
+ * obviously wrong at a glance; "1761 minutes" would not have.
+ */
+function ago(ms: number): string {
+  const minutes = ms / 60_000
+  if (minutes < 90) return `${Math.round(minutes)} minutes ago`
+  const hours = minutes / 60
+  if (hours < 48) return `${hours.toFixed(1)} hours ago`
+  return `${(hours / 24).toFixed(1)} days ago`
+}
+
 export class Robots {
   /**
    * Policy fetches in flight, keyed by origin.
@@ -178,7 +219,7 @@ export class Robots {
       return {
         allowed: false,
         code: "blocked_robots",
-        detail: `${host} is in PAGEFETCH_ROBOTS_DENY — refused by local policy, not by its robots.txt`,
+        detail: denyDetail(host),
       }
     }
 
@@ -212,17 +253,70 @@ export class Robots {
    * `check_reachable` and `cache_lookup` promise zero outbound requests, so they
    * cannot go and read a policy they do not have. An unknown answer is an honest
    * one; pretending would be worse than admitting it.
+   *
+   * But admitting it is not the same as saying nothing. Where the store knows
+   * *why* the policy is unknown — never asked, lapsed, or unreadable — and what
+   * it last said, that goes in `detail`, because a caller who is about to spend
+   * thirty fetches deserves the strongest hint we can give away for free.
    */
-  peek(target: URL): "allowed" | "disallowed" | "unknown" {
+  peek(target: URL): RobotsPeek {
     const host = target.hostname.toLowerCase()
-    if (this.config.robotsDeny.has(host)) return "disallowed"
-    if (this.config.robotsOverride.has(host)) return "allowed"
+    const origin = target.origin
+    const path = `${target.pathname}${target.search}`
 
-    const cached = this.store.lookupRobots(target.origin, this.config.robotsTtlSeconds)
-    if (!cached) return "unknown"
-    if (cached.failure) return "unknown"
+    // Both config entries are decisions a person already made, so neither is
+    // ever stale and neither depends on the store.
+    if (this.config.robotsDeny.has(host)) {
+      return {
+        state: "disallowed",
+        code: "blocked_robots",
+        detail: denyDetail(host),
+      }
+    }
+    if (this.config.robotsOverride.has(host)) {
+      return { state: "allowed", detail: `${host} is in PAGEFETCH_ROBOTS_OVERRIDE — its robots.txt is deliberately ignored` }
+    }
 
-    return isAllowed(cached.rules ?? [], `${target.pathname}${target.search}`) ? "allowed" : "disallowed"
+    const stored = this.store.peekRobots(origin)
+    if (!stored) {
+      return {
+        state: "unknown",
+        detail: `no robots.txt has been read for ${origin} yet — fetch_page will read it first, and may refuse once it has`,
+      }
+    }
+
+    const age = Date.now() - stored.fetchedAtMs
+    const fresh = age <= this.config.robotsTtlSeconds * 1000
+
+    // A cached failure is not "no policy known, proceed hopefully" — within the
+    // TTL it is precisely what a fetch would refuse with, so say so.
+    if (stored.failure) {
+      return fresh
+        ? { state: "unknown", code: stored.failure.code, detail: stored.failure.detail }
+        : {
+            state: "unknown",
+            detail: `robots.txt for ${origin} could not be read ${ago(age)} (${stored.failure.code}); fetch_page will try again`,
+          }
+    }
+
+    const verdict = isAllowed(stored.rules ?? [], path) ? "allowed" : "disallowed"
+    if (fresh) {
+      return verdict === "allowed"
+        ? { state: "allowed" }
+        : { state: "disallowed", code: "blocked_robots", detail: `robots.txt for ${origin} disallows ${path}` }
+    }
+
+    // Lapsed. It may not decide the fetch — RFC 9309 caps the cache at a day —
+    // but it is much better than nothing as a prediction, so it is reported as
+    // one: `unknown`, no code, and a sentence saying what it last said.
+    return {
+      state: "unknown",
+      detail:
+        verdict === "allowed"
+          ? `the cached robots.txt for ${origin} lapsed — read ${ago(age)}, when it allowed ${path}. fetch_page will re-read it.`
+          : `the cached robots.txt for ${origin} lapsed — read ${ago(age)}, when it DISALLOWED ${path}. ` +
+            `fetch_page will re-read it and will almost certainly return blocked_robots.`,
+    }
   }
 
   private async policyFor(target: URL): Promise<CachedRobots> {
