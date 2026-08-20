@@ -112,6 +112,36 @@ test("check_reachable admits when it does not know the robots policy", async () 
   assert.equal(body.robots, "unknown")
 })
 
+test("an unknown robots policy is explained, not just reported", async () => {
+  // The defect this pins: `code: "ok"` beside `robots: "unknown"` reads as a
+  // green light, and the doc tells callers to branch on `code`. An agent did
+  // exactly that and walked into a URL whose robots.txt is `Disallow: /`. The
+  // code is still `ok` — a fetch genuinely might succeed — so `detail` has to
+  // carry the caveat, every time, or nothing does.
+  await resetCounts()
+  const { body } = await call("check_reachable", { url: "http://coldrobots-fixture:3000/anything" })
+
+  assert.equal(body.code, "ok")
+  assert.equal(body.robots, "unknown")
+  assert.match(String(body.detail), /robots\.txt/, "an unknown policy must say so in words")
+  assert.match(String(body.detail), /may refuse|will re-read|try again/, "and say what that means for a fetch")
+
+  const seen = await counts()
+  assert.equal(seen["coldrobots-fixture /robots.txt"], undefined, "explaining the gap must not cost a request")
+})
+
+test("a known-allowed path is reported without a caveat it does not need", async () => {
+  // The mirror of the above: when the policy is fresh and permits the path,
+  // there is nothing to warn about, and inventing a warning would train callers
+  // to ignore the field.
+  await fetchPage({ url: `${FIXTURE}/plain?probe-detail-${tag}` })
+
+  const { body } = await call("check_reachable", { url: `${FIXTURE}/plain?probe-detail-uncached-${tag}` })
+  assert.equal(body.code, "ok")
+  assert.equal(body.robots, "allowed")
+  assert.equal(body.detail, undefined)
+})
+
 test("check_reachable rejects a private address", async () => {
   const { body } = await call("check_reachable", { url: "http://169.254.169.254/latest/meta-data/" })
   assert.equal(body.code, "invalid_url")

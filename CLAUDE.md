@@ -41,8 +41,13 @@ host that does not resolve is `origin_error`, not `invalid_url` (#17): the two
 codes say opposite things about retrying, and a resolution failure carries no
 SSRF risk to be cautious about.
 
-**Still open:** the detail parser for the first scholarship source (#16). The
-rest is in `docs/PRD.md` and issue #1.
+`check_reachable` answers `ok` for "no known obstacle", never "this will work"
+(#19). When the robots policy is `unknown`, `detail` says which of the three
+reasons it is — never read, lapsed, or unreadable — and a lapsed policy is
+reported along with what it last said. The 24-hour robots TTL is an RFC 9309
+ceiling and the server refuses to start above it.
+
+**Still open:** nothing but the parent, #1. `docs/PRD.md` has the rest.
 
 ## Read first
 

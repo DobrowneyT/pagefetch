@@ -138,6 +138,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     )
   }
 
+  // A day is the ceiling, not a default to tune. RFC 9309 §2.4: a crawler
+  // SHOULD NOT use a cached robots.txt for more than 24 hours. It is tempting to
+  // raise this — at a weekly cadence the probe is blind most of the cycle — but
+  // the cure for a blind probe is telling the caller the policy has lapsed, not
+  // acting on a policy we are no longer entitled to.
+  const robotsTtlSeconds = number(env, "PAGEFETCH_ROBOTS_TTL_SECONDS", 86_400)
+  if (robotsTtlSeconds > 86_400) {
+    throw new Error(
+      `PAGEFETCH_ROBOTS_TTL_SECONDS is ${robotsTtlSeconds}. RFC 9309 §2.4 caps a cached robots.txt at ` +
+        `86400 seconds, and this service reads robots.txt as written. If check_reachable is answering ` +
+        `"unknown" too often, read its detail — a lapsed policy is reported along with what it last said.`,
+    )
+  }
+
   const token = required(env, "PAGEFETCH_TOKEN")
   if (token.length < 16) throw new Error("PAGEFETCH_TOKEN must be at least 16 characters.")
   if (token === "generate-a-random-token-here") throw new Error("PAGEFETCH_TOKEN is still the placeholder from .env.example.")
@@ -163,7 +177,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     // A week. At a weekly collection cadence this means each page is fetched
     // exactly once, which is the entire economic argument for the service.
     cacheTtlSeconds: number(env, "PAGEFETCH_CACHE_TTL_SECONDS", 604_800),
-    robotsTtlSeconds: number(env, "PAGEFETCH_ROBOTS_TTL_SECONDS", 86_400),
+    robotsTtlSeconds,
     robotsOverride: hostSet(env.PAGEFETCH_ROBOTS_OVERRIDE),
     robotsDeny: hostSet(env.PAGEFETCH_ROBOTS_DENY),
     allowHosts: hostSet(env.PAGEFETCH_ALLOW_HOSTS),

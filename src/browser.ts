@@ -432,7 +432,7 @@ export class Browser {
       from_cache: cached !== null,
       fetched_at: cached?.fetchedAt ?? null,
       domain,
-      robots,
+      robots: robots.state,
     }
 
     // A cache hit needs neither the domain nor its policy — it costs nothing and
@@ -442,11 +442,12 @@ export class Browser {
     if (domain !== "available") {
       return { code: "domain_benched", ...base, detail: `${host} is ${domain}` }
     }
-    if (robots === "disallowed") {
-      return { code: "blocked_robots", ...base, detail: `robots.txt for ${verdict.url.origin} disallows this path` }
-    }
 
-    return { code: "ok", ...base }
+    // `ok` here means "no known obstacle", never "this will work" — so whatever
+    // the probe knows about *why* it does not know goes out with it. That
+    // sentence is the whole fix: the code stays honest about its own limits
+    // instead of reading as a green light beside a `robots: "unknown"`.
+    return { code: robots.code ?? "ok", ...base, ...(robots.detail ? { detail: robots.detail } : {}) }
   }
 
   /**

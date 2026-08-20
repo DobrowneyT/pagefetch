@@ -58,6 +58,12 @@ export interface BatchResult {
  * `code` is what `fetch_page` would return **right now**, as far as can be known
  * without asking the origin. That is what makes the probe worth calling: an
  * agent sees `domain_benched` and skips thirty rate-limited failures.
+ *
+ * The load-bearing half of that sentence is "as far as can be known". An `ok`
+ * from this tool means **no known obstacle**, not "this will work" — and when
+ * the robots policy is `unknown`, `detail` says so in words, because a code
+ * that reads as a green light beside a field that says otherwise is how an
+ * agent walks into a certain refusal.
  */
 export interface ReachableResult {
   code: Code
@@ -67,7 +73,10 @@ export interface ReachableResult {
   /** When the cached copy was fetched, or null if there is none. */
   fetched_at: string | null
   domain: "available" | "benched" | "disabled"
-  /** `unknown` when we have no cached policy — we will not fetch one to find out. */
+  /**
+   * `unknown` when no usable policy is stored — never read, lapsed, or
+   * unreadable. We will not fetch one to find out; `detail` says which it is.
+   */
   robots: "allowed" | "disallowed" | "unknown"
   detail?: string
 }

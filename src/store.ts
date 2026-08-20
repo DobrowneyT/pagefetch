@@ -197,7 +197,30 @@ export class Store {
       .run(requested, page.urlFinal, page.fetchedAtMs)
   }
 
+  /**
+   * The policy a fetch may act on: the stored one, or nothing if it has lapsed.
+   *
+   * The TTL is not a tuning knob. RFC 9309 §2.4 caps a cached `robots.txt` at
+   * twenty-four hours, so a lapsed entry must not be allowed to decide a fetch,
+   * however recently it lapsed and however unlikely the site is to have changed.
+   */
   lookupRobots(origin: string, ttlSeconds: number): CachedRobots | null {
+    const entry = this.peekRobots(origin)
+    if (!entry) return null
+    if (Date.now() - entry.fetchedAtMs > ttlSeconds * 1000) return null
+    return entry
+  }
+
+  /**
+   * The stored policy whatever its age, for the probe to reason about.
+   *
+   * A lapsed entry may not decide a fetch, but "we read this yesterday and it
+   * said no" is still a fact, and one the caller of `check_reachable` would
+   * plainly rather have than a bare `unknown`. Telling them costs nothing and
+   * changes no fetch decision — `lookupRobots` is still the only door into the
+   * fetch path, and it still shuts at the TTL.
+   */
+  peekRobots(origin: string): CachedRobots | null {
     const row = this.db.prepare("SELECT * FROM robots WHERE origin = ?").get(origin) as
       | {
           rules: string | null
@@ -207,7 +230,6 @@ export class Store {
         }
       | undefined
     if (!row) return null
-    if (Date.now() - row.fetched_at_ms > ttlSeconds * 1000) return null
 
     return {
       rules: row.rules ? (JSON.parse(row.rules) as Rule[]) : null,
