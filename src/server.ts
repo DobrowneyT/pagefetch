@@ -69,6 +69,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, config: Config,
 
   // Both transports route into the same handler; this one only unwraps a
   // JSON-RPC envelope on the way in and wraps the answer on the way out.
+  // The MCP Streamable HTTP transport lets a client open a server-to-client SSE
+  // stream with GET. We do not offer one — every response here is a direct reply
+  // to a POST — and the specification says a server that does not MUST answer
+  // 405 rather than 404. The difference matters to a strict client: 404 reads as
+  // "there is no such endpoint" and can sink the whole connection, where 405
+  // reads as "no stream here" and it proceeds to POST.
+  if (path === "/mcp" && req.method === "GET") {
+    res.setHeader("allow", "POST")
+    send(res, 405, { error: "GET /mcp is not supported; this transport has no server-to-client stream. POST here." })
+    return
+  }
+
   if (path === "/mcp" && req.method === "POST") {
     try {
       const started = Date.now()

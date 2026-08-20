@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { rpc, rpcNotify } from "../container/client.js"
+import { baseUrl, rpc, rpcNotify } from "../container/client.js"
 
 /**
  * Protocol-level behaviour that only exists on `/mcp`.
@@ -113,4 +113,18 @@ test("the id is echoed back so a client can correlate", async () => {
 
   assert.equal(body.jsonrpc, "2.0")
   assert.equal(typeof body.id, "number")
+})
+
+test("GET /mcp is 405, not 404", async () => {
+  // The Streamable HTTP transport lets a client open a server-to-client SSE
+  // stream with GET. We do not offer one, and the specification says a server
+  // that does not MUST answer 405. A 404 reads as "no such endpoint" and can
+  // sink the connection before the client ever POSTs.
+  const response = await fetch(`${baseUrl}/mcp`, {
+    method: "GET",
+    headers: { authorization: `Bearer ${process.env.PAGEFETCH_TOKEN ?? ""}`, accept: "text/event-stream" },
+  })
+
+  assert.equal(response.status, 405)
+  assert.equal(response.headers.get("allow"), "POST")
 })
