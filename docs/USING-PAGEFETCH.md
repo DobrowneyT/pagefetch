@@ -270,6 +270,21 @@ instead of thirty rate-limited failures.
 `code` is what `fetch_page` **would return right now**, as far as can be known
 without asking the origin. `from_cache` tells you whether a fetch would be free.
 
+#### `blocked_challenge` depends on which server you asked
+
+The same code means two different things, and `detail` is what tells them apart:
+
+- **from a launched browser** — Playwright started it, so `navigator.webdriver`
+  reads `true` and some origins refuse on that alone. An instance attached to a
+  browser a person launched may well get through. Measured: this is what moved
+  two of five scholarship aggregators from refused to reachable.
+- **from an attached browser** — capability is exhausted. Stop, and tell the
+  human. Nothing further is in scope: patching what the browser reports about
+  itself is not something this service will do.
+
+`GET /health` reports which one you are talking to as `mode`, either `launched`
+or `attached`. Worth checking once at startup rather than per request.
+
 **`robots` may be `unknown`, and that is honest.** This tool makes no network
 request whatsoever — that is what makes it cheap — so if we have not already read
 that domain's `robots.txt`, we will not go and read it just to answer a probe.
@@ -298,7 +313,7 @@ closed set, and each has a defined answer to "should I retry?".
 | `code` | Meaning | What you must do |
 |---|---|---|
 | `ok` | Fetched | Proceed |
-| `blocked_challenge` | Interstitial; not reachable this way | **Stop.** Tell the human the page is unreachable. |
+| `blocked_challenge` | Interstitial; not reachable **this way** | **Stop** — but read `detail`, which says whether another deployment could get through. |
 | `blocked_robots` | Disallowed by `robots.txt`, or by the operator's own deny list | **Stop.** This is policy, not a failure. Do not look for a workaround. |
 | `rate_limited` | Our own limiter | Retry after `retry_after` seconds |
 | `domain_benched` | Backoff after prior blocks, or a domain disabled after repeated ones | **Stop.** Report to the human. |

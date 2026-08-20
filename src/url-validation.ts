@@ -24,7 +24,22 @@
 import { isIP } from "node:net"
 import { lookup } from "node:dns/promises"
 
-export type Verdict = { ok: true; url: URL } | { ok: false; reason: string }
+/**
+ * Why a URL was refused, so the caller can map it onto the right code.
+ *
+ * `invalid_url` is a judgement about the URL and tells a caller not to retry.
+ * `unreachable` is a judgement about the origin and becomes `origin_error`,
+ * which tells a caller to retry once. Folding the two together made a transient
+ * resolver failure look like a malformed URL, and an agent that believes the URL
+ * it was handed is malformed gives up permanently on a page that would work a
+ * minute later.
+ *
+ * Note that a resolution *failure* carries no SSRF risk — there is no address to
+ * be tricked by — so reporting it accurately weakens nothing.
+ */
+export type Refusal = "invalid_url" | "unreachable"
+
+export type Verdict = { ok: true; url: URL } | { ok: false; reason: string; refusal: Refusal }
 
 /** Suffixes that never name a public host. Checked against the whole hostname too. */
 const PRIVATE_SUFFIXES = [".localhost", ".internal", ".local", ".home.arpa", ".lan", ".intranet"]
@@ -88,34 +103,34 @@ export function validateUrlSyntax(raw: string, allowHosts: ReadonlySet<string> =
   try {
     url = new URL(raw)
   } catch {
-    return { ok: false, reason: `not a valid URL: ${raw}` }
+    return { ok: false, reason: `not a valid URL: ${raw}`, refusal: "invalid_url" }
   }
 
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    return { ok: false, reason: `scheme ${url.protocol} is not allowed; only http and https` }
+    return { ok: false, reason: `scheme ${url.protocol} is not allowed; only http and https`, refusal: "invalid_url" }
   }
 
   // Credentials in a URL are both an authenticated-scraping vector (out of
   // scope by design) and a parser-confusion trick — http://good.example@169.254.169.254/
   // reads as "good.example" to anything that splits on the wrong character.
   if (url.username || url.password) {
-    return { ok: false, reason: "credentials in the URL are not allowed" }
+    return { ok: false, reason: "credentials in the URL are not allowed", refusal: "invalid_url" }
   }
 
   const hostname = url.hostname.toLowerCase()
-  if (!hostname) return { ok: false, reason: "URL has no host" }
+  if (!hostname) return { ok: false, reason: "URL has no host", refusal: "invalid_url" }
 
   if (allowHosts.has(hostname)) return { ok: true, url }
 
-  if (PRIVATE_NAMES.has(hostname)) return { ok: false, reason: `${hostname} is a reserved name` }
+  if (PRIVATE_NAMES.has(hostname)) return { ok: false, reason: `${hostname} is a reserved name`, refusal: "invalid_url" }
   if (PRIVATE_SUFFIXES.some((suffix) => hostname.endsWith(suffix))) {
-    return { ok: false, reason: `${hostname} is in a reserved namespace` }
+    return { ok: false, reason: `${hostname} is in a reserved namespace`, refusal: "invalid_url" }
   }
 
   // URL wraps IPv6 literals in brackets; isIP does not want them.
   const literal = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname
   if (isIP(literal) !== 0) {
-    if (isPrivateAddress(literal)) return { ok: false, reason: `${literal} is a private or reserved address` }
+    if (isPrivateAddress(literal)) return { ok: false, reason: `${literal} is a private or reserved address`, refusal: "invalid_url" }
     return { ok: true, url }
   }
 
@@ -124,7 +139,7 @@ export function validateUrlSyntax(raw: string, allowHosts: ReadonlySet<string> =
   // this service would otherwise be perfect for. Rejecting it here means we do
   // not have to survive a DNS lookup to be safe from it.
   if (!hostname.includes(".")) {
-    return { ok: false, reason: `${hostname} is a single-label hostname, which cannot be a public site` }
+    return { ok: false, reason: `${hostname} is a single-label hostname, which cannot be a public site`, refusal: "invalid_url" }
   }
 
   return { ok: true, url }
@@ -150,17 +165,20 @@ export async function validateUrl(raw: string, allowHosts: ReadonlySet<string> =
   try {
     addresses = await lookup(hostname, { all: true })
   } catch {
-    return { ok: false, reason: `${hostname} does not resolve` }
+    // Not a bad URL — an origin we cannot reach right now. See `Refusal`.
+    return { ok: false, reason: `${hostname} does not resolve`, refusal: "unreachable" }
   }
 
-  if (addresses.length === 0) return { ok: false, reason: `${hostname} resolves to nothing` }
+  if (addresses.length === 0) {
+    return { ok: false, reason: `${hostname} resolves to nothing`, refusal: "unreachable" }
+  }
 
   // ANY private answer disqualifies the host. The browser resolves
   // independently and may pick a different answer than we did, so "one of them
   // is public" is not good enough.
   for (const { address } of addresses) {
     if (isPrivateAddress(address)) {
-      return { ok: false, reason: `${hostname} resolves to ${address}, a private or reserved address` }
+      return { ok: false, reason: `${hostname} resolves to ${address}, a private or reserved address`, refusal: "invalid_url" }
     }
   }
 

@@ -140,3 +140,30 @@ test("a bad format is rejected rather than silently defaulted", async () => {
   const outcome = await fetchPage({ url: `${FIXTURE}/plain`, format: "pdf" })
   assert.equal((outcome as unknown as { error: string }).error !== undefined, true)
 })
+
+test("a blocked_challenge says what to do about it, not just that it happened", async () => {
+  // The advice travels with the refusal rather than needing a second call —
+  // that is the point of the error contract. This stack launched its own
+  // browser, so the honest advice is that an attached one may get through.
+  const outcome = await fetchPage({ url: `${FIXTURE}/challenge?advice-${tag}` })
+
+  assert.equal(outcome.code, "blocked_challenge")
+  assert.match(String(outcome.detail), /attached/)
+})
+
+test("a host that does not resolve is origin_error, not invalid_url", async () => {
+  // The two codes say opposite things about retrying. A transient resolver
+  // failure reported as invalid_url makes an agent conclude the URL it was
+  // handed is malformed and give up permanently on a page that would work.
+  const outcome = await fetchPage({ url: "https://this-name-does-not-exist.invalid/" })
+
+  assert.equal(outcome.code, "origin_error", `expected origin_error, got ${outcome.code}: ${outcome.detail}`)
+})
+
+test("a name resolving to a private address is still invalid_url", async () => {
+  // The security verdict must not move with it. This is the attack the
+  // resolution check exists for, and it stays a judgement about the URL.
+  const outcome = await fetchPage({ url: "http://localtest.me/" })
+
+  assert.equal(outcome.code, "invalid_url", `expected invalid_url, got ${outcome.code}: ${outcome.detail}`)
+})

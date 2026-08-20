@@ -35,7 +35,7 @@
  * favour, which is why it does not.
  */
 import type { Code, FetchResult } from "./codes.js"
-import type { Config } from "./config.js"
+import { challengeAdvice, type Config } from "./config.js"
 import type { CachedRobots, Store } from "./store.js"
 
 export interface Rule {
@@ -263,7 +263,9 @@ export class Robots {
         rules: null,
         failure: {
           code: "blocked_challenge",
-          detail: `could not read ${origin}/robots.txt — the origin served a challenge for it`,
+          detail:
+            `could not read ${origin}/robots.txt — the origin served a challenge for it — ` +
+            challengeAdvice(this.config),
         },
       }
     }

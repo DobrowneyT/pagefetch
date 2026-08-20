@@ -72,3 +72,38 @@ test("isPrivateAddress refuses anything it cannot parse", () => {
     assert.equal(isPrivateAddress(value), true, `${value} should be refused`)
   }
 })
+
+test("a host that does not resolve is unreachable, not invalid", async () => {
+  // The codes say opposite things about retrying. `invalid_url` means the URL is
+  // wrong and a caller should give up; a transient resolver failure means the
+  // origin is unreachable right now and is worth one retry. Folding them
+  // together made an agent abandon a page that would work a minute later.
+  const verdict = await validateUrl("https://this-name-does-not-exist.invalid/")
+  assert.equal(verdict.ok, false)
+  if (!verdict.ok) assert.equal(verdict.refusal, "unreachable")
+})
+
+test("a name resolving to a private address is still invalid_url", async () => {
+  // The security verdict must not move. A resolution FAILURE carries no SSRF
+  // risk — there is no address to be tricked by — but a resolution to
+  // 127.0.0.1 is the attack, and it stays a refusal about the URL.
+  const verdict = await validateUrl("http://localtest.me/")
+  assert.equal(verdict.ok, false)
+  if (!verdict.ok) assert.equal(verdict.refusal, "invalid_url")
+})
+
+test("every syntax refusal is a judgement about the URL", async () => {
+  for (const url of [
+    "http://169.254.169.254/",
+    "http://127.0.0.1/",
+    "ftp://example.com/",
+    "http://user:pass@example.com/",
+    "http://postgres:5432/",
+    "http://localhost/",
+    "not-a-url",
+  ]) {
+    const verdict = validateUrlSyntax(url)
+    assert.equal(verdict.ok, false, `${url} should be refused`)
+    if (!verdict.ok) assert.equal(verdict.refusal, "invalid_url", `${url} should be invalid_url`)
+  }
+})

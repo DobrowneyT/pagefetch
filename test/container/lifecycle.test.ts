@@ -48,3 +48,19 @@ test("health needs no token, so a container healthcheck does not carry one", asy
   const response = await fetch(`${baseUrl}/health`, { headers: {} })
   assert.equal(response.status, 200)
 })
+
+test("health names which kind of browser is answering", async () => {
+  // A blocked_challenge means two different things depending on the mode, and
+  // the closed code set cannot carry that distinction. From a launched browser
+  // it means "an attached one may get through"; from an attached one it means
+  // capability is exhausted. Same code, opposite correct action — so the mode
+  // has to be discoverable somewhere, and the startup log is not somewhere a
+  // consumer can read.
+  const response = await fetch(`${baseUrl}/health`)
+  const body = (await response.json()) as { mode?: string }
+
+  assert.ok(body.mode, "health should report the fetch mode")
+  assert.ok(["launched", "attached"].includes(body.mode ?? ""), `unexpected mode ${body.mode}`)
+  // This stack launches its own browser.
+  assert.equal(body.mode, "launched")
+})

@@ -75,6 +75,33 @@ export interface Config {
   allowHosts: Set<string>
 }
 
+/**
+ * Which kind of browser is answering.
+ *
+ * `launched` is one Playwright started, and `navigator.webdriver` reads `true`
+ * on it. `attached` is one a person started normally, where the flag reads
+ * `false` because it was never set. That difference is measured, not assumed —
+ * see `docs/reachability/NOTES.md` — and it is why the same `blocked_challenge`
+ * means different things from each.
+ */
+export type FetchMode = "launched" | "attached"
+
+export function fetchMode(config: Pick<Config, "cdpUrl">): FetchMode {
+  return config.cdpUrl ? "attached" : "launched"
+}
+
+/**
+ * What a caller should actually do about a `blocked_challenge`, given the mode.
+ *
+ * Travels with the refusal rather than needing a second call, because the whole
+ * point of the error contract is that a caller can decide from the response.
+ */
+export function challengeAdvice(config: Pick<Config, "cdpUrl">): string {
+  return config.cdpUrl
+    ? "an attached browser was refused, so capability is exhausted here — stop"
+    : "a launched browser was refused; an attached one may get through — see docs/BYOB.md"
+}
+
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name]
   if (!value) throw new Error(`${name} is required. Copy .env.example to .env and fill it in.`)

@@ -34,7 +34,14 @@ how sitemaps and any other non-document are read — the three rendered formats 
 go through the DOM, and a sitemap has none. No format ever answers `ok` with an
 empty body.
 
-**Still open:** wiring the consumers to the sites now known reachable (#14). The
+`GET /health` reports `mode` — `launched` or `attached` (#15). A
+`blocked_challenge` means "try an attached browser" from one and "stop" from the
+other, so the advice travels in `detail` rather than needing a second call. A
+host that does not resolve is `origin_error`, not `invalid_url` (#17): the two
+codes say opposite things about retrying, and a resolution failure carries no
+SSRF risk to be cautious about.
+
+**Still open:** the detail parser for the first scholarship source (#16). The
 rest is in `docs/PRD.md` and issue #1.
 
 ## Read first

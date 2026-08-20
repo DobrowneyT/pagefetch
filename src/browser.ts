@@ -10,7 +10,7 @@ import {
   type Page,
   type Response,
 } from "playwright"
-import type { Config } from "./config.js"
+import { challengeAdvice, fetchMode, type Config } from "./config.js"
 import { browserTreeRssBytes, stateFileName } from "./lifecycle.js"
 import { result, type BatchResult, type FetchResult, type ReachableResult } from "./codes.js"
 import { EgressProxy, REJECTED_HEADER } from "./egress-proxy.js"
@@ -256,6 +256,10 @@ export class Browser {
   async stats(): Promise<Record<string, unknown>> {
     return {
       ok: true,
+      // Which kind of browser is answering. A `blocked_challenge` from a
+      // launched browser means "try an attached one"; from an attached one it
+      // means stop. Same code, opposite correct action.
+      mode: fetchMode(this.config),
       browser: this.browser ? "up" : "not started",
       contexts: this.contexts.size,
       rss_mb: Math.round((await this.browserRssBytes()) / 1_048_576),
@@ -331,7 +335,11 @@ export class Browser {
     // anyway; doing it here means an obviously bad URL costs nothing and gets a
     // better error than a failed navigation would produce.
     const verdict = await validateUrl(request.url, this.config.allowHosts)
-    if (!verdict.ok) return result("invalid_url", { detail: verdict.reason })
+    // A host that does not resolve is an unreachable origin, not a bad URL, and
+    // the codes say opposite things about retrying.
+    if (!verdict.ok) {
+      return result(verdict.refusal === "unreachable" ? "origin_error" : "invalid_url", { detail: verdict.reason })
+    }
 
     // The cache comes before everything, because a hit must cost nothing — no
     // network, and no robots round trip either. We only ever store pages we were
@@ -404,7 +412,7 @@ export class Browser {
     const verdict = await validateUrl(url, this.config.allowHosts)
     if (!verdict.ok) {
       return {
-        code: "invalid_url",
+        code: verdict.refusal === "unreachable" ? "origin_error" : "invalid_url",
         url,
         from_cache: false,
         fetched_at: null,
@@ -795,7 +803,11 @@ export class Browser {
         : validateUrlSyntax(target, this.config.allowHosts)
 
       if (!verdict.ok) {
-        blockedHops.push(verdict.reason)
+        // Only a security refusal is "blocked at the hop". A hop that simply
+        // does not resolve is aborted too — we cannot fetch it either way — but
+        // it is left to fail the navigation normally, so it is reported as an
+        // unreachable origin rather than as something we refused on purpose.
+        if (verdict.refusal === "invalid_url") blockedHops.push(verdict.reason)
         await route.abort("blockedbyclient").catch(() => {})
         return
       }
@@ -857,9 +869,16 @@ export class Browser {
     // By now settleChallenge has given any interstitial its budget to clear, so
     // a marker still being here means it did not.
     const marker = this.challengeMarker(html, response)
-    if (marker) return { code: "blocked_challenge", detail: `interstitial did not clear (${marker})` }
+    if (marker) {
+      return {
+        code: "blocked_challenge",
+        detail: `interstitial did not clear (${marker}) — ${challengeAdvice(this.config)}`,
+      }
+    }
 
-    if (status === 403) return { code: "blocked_challenge", detail: "origin returned 403" }
+    if (status === 403) {
+      return { code: "blocked_challenge", detail: `origin returned 403 — ${challengeAdvice(this.config)}` }
+    }
 
     // Benching exists now, so an origin 429 says what it is: we have been asked
     // to back off, and we have. Subsequent requests get domain_benched from the
