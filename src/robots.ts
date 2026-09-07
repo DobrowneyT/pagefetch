@@ -191,6 +191,34 @@ function ago(ms: number): string {
   return `${(hours / 24).toFixed(1)} days ago`
 }
 
+/**
+ * Codes that mean **we** refused, not that the origin said anything.
+ *
+ * ⚠️ These must never be written to the robots cache, and the reason is a
+ * category error rather than a tuning preference. Everything else stored there
+ * is a fact about the ORIGIN — its policy, or its genuine failure to serve one —
+ * and RFC 9309 §2.4 lets such a fact stand for a day. A limiter refusal is a
+ * fact about OUR OWN momentary state, and it is stale seconds later.
+ *
+ * Caching one under the robots TTL turns a self-imposed pause into a
+ * self-imposed ban: a single burst that exhausts the hourly quota writes
+ * `rate_limited` here, and every later fetch of that domain is refused from
+ * cache for TWENTY-FOUR HOURS — long after the quota drained, and without ever
+ * consulting the limiter that would have allowed it.
+ *
+ * Observed 2026-09-06 on `crimeshub-2b4b0.firebaseapp.com`: quota exhausted at
+ * 16:32, cached, and still refusing at 01:47 the next morning with the window
+ * showing 0 of 20 used. The origin was serving 200s to curl throughout. The
+ * failure is silent and self-reinforcing — it looks exactly like the remote
+ * host rate-limiting us, so the natural response is to wait longer, which never
+ * helps because nothing re-checks.
+ */
+const SELF_INFLICTED = new Set<Code>(["rate_limited", "domain_benched"])
+
+function isSelfInflicted(entry: CachedRobots): boolean {
+  return entry.failure !== undefined && SELF_INFLICTED.has(entry.failure.code)
+}
+
 export class Robots {
   /**
    * Policy fetches in flight, keyed by origin.
@@ -329,7 +357,8 @@ export class Robots {
 
     const pending = this.fetchPolicy(origin)
       .then((entry) => {
-        this.store.storeRobots(origin, entry)
+        // ⚠️ Never cache a refusal WE issued. See SELF_INFLICTED.
+        if (!isSelfInflicted(entry)) this.store.storeRobots(origin, entry)
         return entry
       })
       .finally(() => this.inflight.delete(origin))
